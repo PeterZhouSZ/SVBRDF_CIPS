@@ -6,3 +6,5 @@ tqdm
 pillow
 opencv-python
 torch-fidelity
+tensorboard
+ninja
