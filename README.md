@@ -8,7 +8,11 @@ of the paper [Image Generators with Conditionally-Independent Pixel Synthesis](h
 
 ## Requirements
 
-pip install -r requirements.txt
+> conda create -n CIPS python=3.7
+
+> conda activate CIPS
+
+> pip install -r requirements.txt
 
 ## Usage
 
