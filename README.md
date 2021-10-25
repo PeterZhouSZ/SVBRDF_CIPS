@@ -16,7 +16,7 @@ pip install -r requirements.txt
 
 > python prepare_data.py images --out MDB_PATH --n_worker N_WORKER DATASET_PATH --size 256
 
-This will convert images to jpeg and pre-resizes it. `MDB_PATH =./Data/ValenTrain`
+This will convert images to jpeg and pre-resizes it. `MDB_PATH =./Data/ValenTrain/256`
 
 Or download the MDB file and save it to `./Data/ValenTrain/256`
 
