@@ -225,10 +225,12 @@ class ModulatedConv2d(nn.Module):
             f'upsample={self.upsample}, downsample={self.downsample})'
         )
 
-    def forward(self, input, style):
+    def forward(self, input, style, style_plus = False):
         batch, in_channel, height, width = input.shape
+        # print('style_plus ', style_plus)
+        if not style_plus:
+            style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
 
-        style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
         weight = self.scale * self.weight * style
 
         if self.demodulate:
@@ -266,7 +268,7 @@ class ModulatedConv2d(nn.Module):
             _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
 
-        return out
+        return out, style
 
 
 class NoiseInjection(nn.Module):
@@ -332,14 +334,15 @@ class StyledConv(nn.Module):
         else:
             self.activate = FusedLeakyReLU(out_channel)
 
-    def forward(self, input, style, noise=None):
-        out = self.conv(input, style)
+    def forward(self, input, style, noise=None, style_plus=False):
+        # print('styled Conv: ', style_plus)
+        out, style = self.conv(input, style, style_plus=style_plus)
         out = self.noise(out, noise=noise)
         if self.activation == 'sinrelu' or self.activation == 'sin':
             out = out + self.bias
         out = self.activate(out)
 
-        return out
+        return out, style
 
 
 class ToRGB(nn.Module):
@@ -353,9 +356,10 @@ class ToRGB(nn.Module):
         self.conv = ModulatedConv2d(in_channel, out_channel, 1, style_dim, demodulate=False)
         self.bias = nn.Parameter(torch.zeros(1, out_channel, 1, 1))
 
-    def forward(self, input, style, skip=None):
-        out = self.conv(input, style)
+    def forward(self, input, style, skip=None, style_plus=False):
+        out, style = self.conv(input, style, style_plus=style_plus)
         out = out + self.bias
+        # print('rgb styled Conv: ', style_plus)
 
         if skip is not None:
             if self.upsample:
@@ -363,7 +367,7 @@ class ToRGB(nn.Module):
 
             out = out + skip
 
-        return out
+        return out, style
 
 
 class EqualConvTranspose2d(nn.Module):

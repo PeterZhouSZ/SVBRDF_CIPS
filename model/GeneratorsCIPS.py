@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock
 
+import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
@@ -68,13 +69,30 @@ class CIPSskip(nn.Module):
 
         self.style = nn.Sequential(*layers)
 
+    def _crop(self, x):
+
+        _,b,w,h = x.shape
+        w0 = random.randint(0,w-256)
+        h0 = random.randint(0,h-256)
+        # print('w0 ',w0)
+        # print('h0 ',h0)
+
+        if w0+256>w or h0+256>h:
+            raise ValueError('value error of w0')
+
+        return x[:,:,w0:w0+256,h0:h0+256]
+
+
     def forward(self,
                 coords,
                 latent,
+                latent_plus=None,
                 return_latents=False,
+                return_latents_plus=False,
                 truncation=1,
                 truncation_latent=None,
                 input_is_latent=False,
+                input_is_latent_plus=False,
                 ):
 
         latent = latent[0]
@@ -82,36 +100,70 @@ class CIPSskip(nn.Module):
         if truncation < 1:
             latent = truncation_latent + truncation * (latent - truncation_latent)
 
-        if not input_is_latent:
+        if not input_is_latent and not input_is_latent_plus:
             latent = self.style(latent)
 
+        # print('coords: ',coords.shape)
         x = self.lff(coords)
+        # print('x1: ',x.shape)
 
         batch_size, _, w, h = coords.shape
         if self.training and w == h == self.size:
             emb = self.emb(x)
+            # print('train emb: ',emb.shape)
         else:
+            # print('gema...............')
             emb = F.grid_sample(
                 self.emb.input.expand(batch_size, -1, -1, -1),
                 coords.permute(0, 2, 3, 1).contiguous(),
                 padding_mode='border', mode='bilinear',
             )
+            # print('gema emb: ',emb.shape)
+
 
         x = torch.cat([x, emb], 1)
+        # print('x2: ',x.shape)
 
         rgb = 0
 
-        x = self.conv1(x, latent)
+        latent_plus_list=[]
+
+        # we do random crop here
+        if x.shape[-1]>256 and self.training:
+            x = self._crop(x)
+            # print('gema....x.................', x.shape)
+
+        # if input_is_latent_plus:
+        #     print('------------------------------',latent[0].shape)
+
+        x, latent_plus = self.conv1(x, latent if not input_is_latent_plus else latent[0],style_plus=input_is_latent_plus)
+        # print('+++++++++++++++++++++++++++++++++++',latent_plus.shape)
+        latent_index = 1
+        latent_plus_list.append(latent_plus)
+
         for i in range(self.n_intermediate):
             for j in range(self.to_rgb_stride):
-                x = self.linears[i*self.to_rgb_stride + j](x, latent)
+                # print('G input_is_latent: ', input_is_latent_plus)
+                x, latent_plus = self.linears[i*self.to_rgb_stride + j](x, latent if not input_is_latent_plus else latent[latent_index],style_plus=input_is_latent_plus)
+                latent_index += 1
+                latent_plus_list.append(latent_plus)
 
-            rgb = self.to_rgbs[i](x, latent, rgb)
+            # print('rgb index', latent_index)
+            rgb, latent_plus = self.to_rgbs[i](x, latent if not input_is_latent_plus else latent[latent_index], rgb, style_plus=input_is_latent_plus)
+            latent_index += 1
+            latent_plus_list.append(latent_plus)
+
+
+        # print('rgb shape: ', rgb.shape)
 
         if return_latents:
-            return rgb, latent
+            return rgb, latent, None
+
+        elif return_latents_plus:
+            return rgb, None, latent_plus_list
+
         else:
-            return rgb, None
+            return rgb, None, None
 
 
 class CIPSres(nn.Module):
@@ -207,3 +259,25 @@ class CIPSres(nn.Module):
         else:
             return out, None
 
+
+# rgb index 3
+# rgb index 6
+# rgb index 9
+# rgb index 12
+# rgb index 15
+# rgb index 18
+# rgb index 21
+# rgb index 3
+# rgb index 6
+# rgb index 9
+# rgb index 12
+# rgb index 15
+# rgb index 18
+# rgb index 21
+# rgb index 3
+# rgb index 6
+# rgb index 9
+# rgb index 12
+# rgb index 15
+# rgb index 18
+# rgb index 21

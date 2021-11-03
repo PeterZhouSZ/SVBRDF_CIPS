@@ -68,29 +68,35 @@ class MultiScaleDataset(Dataset):
             img = torch.cat((img[:,:,:,h:2*h],img[:,:,:,2*h:3*h],img[:,0:1,:,3*h:4*h],img[:,:,:,4*h:5*h]), dim=1)
         
         # ---------------------------------------------------------- 
+        # print('img.shape', img.shape)
+        # print('crop ', self.crop_size)
 
-        stack = torch.cat([img, self.coords], 1)
-        del img
+        # stack = torch.cat([img, self.coords], 1)
+        # del img
+        # print('stack.shape',stack.shape)
 
-        data[0] = self.crop(stack).squeeze(0)
-        stack = stack.squeeze(0)
+        # data[0] = self.crop(stack).squeeze(0)
 
-        stack_strided = None
-        for ls in range(self.log_size, 0, -1):
-            n = 2 ** ls
-            bias = self.resolution - n*self.crop_size + n
-            bw = np.random.randint(bias)
-            bh = np.random.randint(bias)
-            stack_strided = stack[:, bw::n, bh::n]
-            if stack_strided.size(2) != self.crop or stack_strided.size(1) != self.crop:
-                data[ls] = self.crop(stack_strided.unsqueeze(0)).squeeze(0)
-            else:
-                data[ls] = stack_strided
+        # print('data[0].shape',data[0].shape)
+        # stack = stack.squeeze(0)
 
-        del stack
-        del stack_strided
+        # stack_strided = None
+        # for ls in range(self.log_size, 0, -1):
+        #     print('ls ',ls)
+        #     n = 2 ** ls
+        #     bias = self.resolution - n*self.crop_size + n
+        #     bw = np.random.randint(bias)
+        #     bh = np.random.randint(bias)
+        #     stack_strided = stack[:, bw::n, bh::n]
+        #     if stack_strided.size(2) != self.crop or stack_strided.size(1) != self.crop:
+        #         data[ls] = self.crop(stack_strided.unsqueeze(0)).squeeze(0)
+        #     else:
+        #         data[ls] = stack_strided
 
-        return data
+        # del stack
+        # del stack_strided
+
+        return img.squeeze(0), self.coords.squeeze(0)
 
 
 class ImageDataset(Dataset):

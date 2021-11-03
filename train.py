@@ -115,21 +115,24 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         
     accum = 0.5 ** (32 / (10 * 1000))
 
-    sample_z = torch.randn(args.n_sample, args.latent, device=device)
 
     for idx in pbar:
         i = idx + args.start_iter
 
         if i > args.iter:
             print('Done!')
-
             break
 
         data = next(loader)
         key = np.random.randint(n_scales)
-        real_stack = data[key].to(device)
+        # real_stack = data[key].to(device)
 
-        real_img, converted = real_stack[:, :-2], real_stack[:, -2:]
+        # real_img, converted = real_stack[:, :-2], real_stack[:, -2:]
+
+        real_img, converted = data
+
+        real_img = real_img.to(device)
+        converted = converted.to(device)
 
         # print('real_img', real_img.shape)
         # print('converted', converted.shape)
@@ -139,7 +142,8 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _ = generator(converted, noise)
+        fake_img, _, _ = generator(converted, noise)
+        # print('fake image:', fake_img.shape)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
 
@@ -174,7 +178,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _ = generator(converted, noise)
+        fake_img, _, _ = generator(converted, noise)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
         g_loss = g_nonsaturating_loss(fake_pred)
@@ -221,18 +225,19 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             if i % 500 == 0:
                 with torch.no_grad():
                     g_ema.eval()
-                    converted_full = convert_to_coord_format(sample_z.size(0), args.size, args.size, device,
+                    converted_full = convert_to_coord_format(args.n_sample, args.coords_size, args.coords_size, device,
                                                              integer_values=args.coords_integer_values)
                     if args.generate_by_one:
-                        converted_full = convert_to_coord_format(1, args.size, args.size, device,
+                        converted_full = convert_to_coord_format(1, args.coords_size, args.coords_size, device,
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _ = g_ema(converted_full, [sz.unsqueeze(0)])
+                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)])
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
-                        sample, _ = g_ema(converted_full, [sample_z])
+                        sample_z = torch.randn(args.n_sample, args.latent, device=device)
+                        sample, _, _ = g_ema(converted_full, [sample_z])
 
                     # print('sample', sample.shape)
                     if sample.shape[1]==10:
