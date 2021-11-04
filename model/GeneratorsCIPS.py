@@ -8,19 +8,24 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock
+from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock, Myembed
 
 import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, tileable=False, **kwargs):
+                 activation=None, channel_multiplier=2, tileable=False, vis_Fourier=False, N_emb=-1, **kwargs):
         super(CIPSskip, self).__init__()
 
         self.size = size
         demodulate = True
         self.demodulate = demodulate
-        self.lff = LFF(hidden_size)
+        if N_emb==-1:
+            self.lff = LFF(hidden_size)
+            c_emb = hidden_size
+        else:
+            c_emb = N_emb*4
+
         self.emb = ConstantInput(hidden_size, size=size)
 
         self.channels = {
@@ -35,9 +40,9 @@ class CIPSskip(nn.Module):
             8: 16 * channel_multiplier,
         }
 
-        multiplier = 2
+        # multiplier = 2
         in_channels = int(self.channels[0])
-        self.conv1 = StyledConv(int(multiplier*hidden_size), in_channels, 1, style_dim, demodulate=demodulate,
+        self.conv1 = StyledConv(int(hidden_size+c_emb), in_channels, 1, style_dim, demodulate=demodulate,
                                 activation=activation)
 
         self.linears = nn.ModuleList()
@@ -70,6 +75,7 @@ class CIPSskip(nn.Module):
         self.style = nn.Sequential(*layers)
         self.Crop_Size = 256
         self.tileable = tileable
+        self.vis_Fourier = False
 
     def _crop(self, x, tileable=False):
 
@@ -93,7 +99,7 @@ class CIPSskip(nn.Module):
             wc = w0 + self.Crop_Size
             hc = h0 + self.Crop_Size
 
-            p = torch.zeros((b,c,self.Crop_Size,self.Crop_Size), dtype=x.dtype, device='cuda')
+            p = torch.zeros((b,c,self.Crop_Size,self.Crop_Size), device='cuda')
             # print('p shape', p.shape)
 
             # seperate crop and stitch them manually
@@ -162,6 +168,7 @@ class CIPSskip(nn.Module):
                 truncation_latent=None,
                 input_is_latent=False,
                 input_is_latent_plus=False,
+                embed_x=None
                 ):
 
         latent = latent[0]
@@ -172,11 +179,18 @@ class CIPSskip(nn.Module):
         if not input_is_latent and not input_is_latent_plus:
             latent = self.style(latent)
 
-        # print('coords: ',coords.shape)
-        x = self.lff(coords)
+        batch_size, _, w, h = coords.shape
+
+        if embed_x is not None:
+            x = embed_x.repeat(batch_size,1,1,1)
+        else:
+            x = self.lff(coords)
+
+        # if self.vis_Fourier:
+        #     Fourier = x[0,0,:,:].clone()
+
         # print('x1: ',x.shape)
 
-        batch_size, _, w, h = coords.shape
         if self.training and w == h == self.size:
             emb = self.emb(x)
             # print('train emb: ',emb.shape)
@@ -189,6 +203,8 @@ class CIPSskip(nn.Module):
             )
             # print('gema emb: ',emb.shape)
 
+        # print(x.shape)
+        # print(emb.shape)
 
         x = torch.cat([x, emb], 1)
         # print('x2: ',x.shape)
@@ -196,7 +212,6 @@ class CIPSskip(nn.Module):
         rgb = 0
 
         latent_plus_list=[]
-
 
         # we do random crop here
         if x.shape[-1]>256 and self.training:

@@ -115,6 +115,14 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         
     accum = 0.5 ** (32 / (10 * 1000))
 
+    converted = convert_to_coord_format(args.batch, args.coords_size, args.coords_size, integer_values=False)
+    embed_x = None
+    if args.N_emb>0:
+        from model.blocks import Myembed
+        embed_fn = Myembed(args.N_emb)
+        embed_x = embed_fn(converted[0:1,...])
+        print('---------NERF embedding ------', embed_x.shape)
+
 
     for idx in pbar:
         i = idx + args.start_iter
@@ -129,10 +137,12 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         # real_img, converted = real_stack[:, :-2], real_stack[:, -2:]
 
-        real_img, converted = data
+        real_img = data
 
         real_img = real_img.to(device)
         converted = converted.to(device)
+        if embed_x is not None:
+            embed_x = embed_x.to(device)
 
         # print('real_img', real_img.shape)
         # print('converted', converted.shape)
@@ -142,7 +152,9 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _ = generator(converted, noise)
+
+        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
+
         # print('fake image:', fake_img.shape)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
@@ -178,7 +190,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _ = generator(converted, noise)
+        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
         g_loss = g_nonsaturating_loss(fake_pred)
@@ -232,12 +244,13 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)])
+                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
                         sample_z = torch.randn(args.n_sample, args.latent, device=device)
-                        sample, _, _ = g_ema(converted_full, [sample_z])
+                        sample, _, _ = g_ema(converted_full, [sample_z], embed_x = embed_x)
+                        del sample_z
 
                     # print('sample', sample.shape)
                     if sample.shape[1]==10:
@@ -411,6 +424,7 @@ if __name__ == '__main__':
     # training
     parser.add_argument('--iter', type=int, default=1200000)
     parser.add_argument('--n_sample', type=int, default=64)
+    parser.add_argument('--N_emb', type=int, default=-1, help='Number of emb channels: -1: LFF | 0 | >0: NERF')
     parser.add_argument('--generate_by_one', action='store_true')
     parser.add_argument('--ckpt', type=str, default=None)
     parser.add_argument('--lr', type=float, default=0.002)
@@ -433,6 +447,7 @@ if __name__ == '__main__':
     parser.add_argument('--fc_dim', type=int, default=512)
     parser.add_argument('--latent', type=int, default=512)
     parser.add_argument('--activation', type=str, default=None)
+    # parser.add_argument('--embed', type=str, default='LFF')
     parser.add_argument('--channel_multiplier', type=int, default=2)
     parser.add_argument('--mixing', type=float, default=0.)
     parser.add_argument('--g_reg_every', type=int, default=4)
@@ -476,7 +491,7 @@ if __name__ == '__main__':
     print('n_scales', n_scales)
 
     generator = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                          activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable
+                          activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
                           ).to(device)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
@@ -485,7 +500,7 @@ if __name__ == '__main__':
         n_first_layers=args.n_first_layers,
     ).to(device)
     g_ema = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable
+                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb
                       ).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)

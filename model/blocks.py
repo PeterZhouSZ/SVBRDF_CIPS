@@ -545,6 +545,27 @@ class LFF(nn.Module):
         x = self.activation(x)
         return x
 
+class Myembed(nn.Module):
+    def __init__(self, N = 512):
+        super(Myembed, self).__init__()
+        self.N_freqs = int(N)
+        self.freq_bands = 2.**torch.linspace(0., self.N_freqs-1, steps=self.N_freqs)
+
+    def forward(self,x):
+        embed_fns=None
+        for freq in self.freq_bands:
+
+            if embed_fns is None:
+                embed_fns = torch.cat([torch.sin(x * freq * np.pi), torch.cos(x * freq * np.pi)],dim=1)
+                # embed_fns = torch.sin(x * freq * np.pi)
+            else:
+                embed_fns = torch.cat((embed_fns, torch.cat([torch.sin(x * freq * np.pi), torch.cos(x * freq * np.pi)],dim=1)) ,dim=1)
+                # embed_fns = torch.cat((embed_fns, torch.sin(x * freq * np.pi)) ,dim=1)
+            # out_dim += d
+
+            # print(embed_fns[0,:,0,0])
+
+        return embed_fns
 
 class ScaledLeakyReLUSin(nn.Module):
     def __init__(self, negative_slope=0.2):

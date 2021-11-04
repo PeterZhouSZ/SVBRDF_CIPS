@@ -31,7 +31,7 @@ class MultiScaleDataset(Dataset):
         self.crop = tt.RandomCrop(crop_size)
         self.crop_resolution = tt.RandomCrop(resolution)
         self.to_crop = to_crop
-        self.coords = tt.convert_to_coord_format(1, resolution, resolution, integer_values=self.integer_values)
+        # self.coords = tt.convert_to_coord_format(1, resolution, resolution, integer_values=self.integer_values)
 
         if not self.env:
             raise IOError('Cannot open lmdb dataset', path)
@@ -58,8 +58,6 @@ class MultiScaleDataset(Dataset):
 
         if self.to_crop:
             img = self.crop_resolution(img)
-        # print(img.shape)
-        # print(self.coords.shape)
 
         # ----------------- prcess svbrdf inputs ----------------- 
         
@@ -96,7 +94,7 @@ class MultiScaleDataset(Dataset):
         # del stack
         # del stack_strided
 
-        return img.squeeze(0), self.coords.squeeze(0)
+        return img.squeeze(0)#, self.coords.squeeze(0)
 
 
 class ImageDataset(Dataset):
