@@ -416,6 +416,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.002)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
+    parser.add_argument('--tileable', action='store_true')
 
     # dataset
     parser.add_argument('--batch', type=int, default=4)
@@ -475,7 +476,7 @@ if __name__ == '__main__':
     print('n_scales', n_scales)
 
     generator = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                          activation=args.activation, channel_multiplier=args.channel_multiplier,
+                          activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable
                           ).to(device)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
@@ -484,7 +485,7 @@ if __name__ == '__main__':
         n_first_layers=args.n_first_layers,
     ).to(device)
     g_ema = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                      activation=args.activation, channel_multiplier=args.channel_multiplier,
+                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable
                       ).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)

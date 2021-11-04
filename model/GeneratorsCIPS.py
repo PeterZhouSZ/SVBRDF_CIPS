@@ -14,7 +14,7 @@ import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, **kwargs):
+                 activation=None, channel_multiplier=2, tileable=False, **kwargs):
         super(CIPSskip, self).__init__()
 
         self.size = size
@@ -68,19 +68,88 @@ class CIPSskip(nn.Module):
             )
 
         self.style = nn.Sequential(*layers)
+        self.Crop_Size = 256
+        self.tileable = tileable
 
-    def _crop(self, x):
+    def _crop(self, x, tileable=False):
 
-        _,b,w,h = x.shape
-        w0 = random.randint(0,w-256)
-        h0 = random.randint(0,h-256)
-        # print('w0 ',w0)
-        # print('h0 ',h0)
+        b,c,h,w = x.shape
+        if not tileable:
+            w0 = random.randint(0,w-self.Crop_Size)
+            h0 = random.randint(0,h-self.Crop_Size)
+            if w0+self.Crop_Size>w or h0+self.Crop_Size>h:
+                raise ValueError('value error of w0')
 
-        if w0+256>w or h0+256>h:
-            raise ValueError('value error of w0')
+            return x[:,:,w0:w0+256,h0:h0+256]
 
-        return x[:,:,w0:w0+256,h0:h0+256]
+        else:
+            w0 = random.randint(-self.Crop_Size,w)
+            h0 = random.randint(-self.Crop_Size,h)
+
+            # print('x shape', x.shape)
+            # w0 = 500
+            # h0 = -60
+
+            wc = w0 + self.Crop_Size
+            hc = h0 + self.Crop_Size
+
+            p = torch.zeros((b,c,self.Crop_Size,self.Crop_Size), dtype=x.dtype, device='cuda')
+            # print('p shape', p.shape)
+
+            # seperate crop and stitch them manually
+            # [7 | 8 | 9]
+            # [4 | 5 | 6]
+            # [1 | 2 | 3]
+            # 1
+            if h0<=0 and w0<=0:
+                p[:,:,0:-h0,0:-w0] = x[:,:, h+h0:h, w+w0:w]
+                p[:,:,-h0:,0:-w0] = x[:,:, 0:hc, w+w0:w]
+                p[:,:,0:-h0,-w0:] = x[:,:, h+h0:h, 0:wc]
+                p[:,:,-h0:,-w0:] = x[:,:, 0:hc, 0:wc]
+            # 2
+            elif h0<=0 and (w0<w-self.Crop_Size and w0>0):
+                p[:,:,0:-h0,:] = x[:,:, h+h0:h,w0:wc]
+                p[:,:,-h0:,:] = x[:,:, 0:hc, w0:wc]
+            # 3
+            elif h0<=0 and w0 >=w-self.Crop_Size:
+                p[:,:,0:-h0,0:w-w0] = x[:,:, h+h0:h, w0:w]
+                p[:,:,-h0:,0:w-w0] = x[:,:, 0:hc, w0:w]
+                p[:,:,0:-h0,w-w0:] = x[:,:, h+h0:h, 0:wc-w]
+                p[:,:,-h0:,w-w0:] = x[:,:, 0:hc, 0:wc-w]
+
+            # 4
+            elif (h0>0 and h0<h-self.Crop_Size) and w0<=0:
+                p[:,:,:,0:-w0] = x[:,:, h0:hc, w+w0:w]
+                p[:,:,:,-w0:] = x[:,:, h0:hc, 0:wc]
+            # 5
+            elif (h0>0 and h0<h-self.Crop_Size) and (w0<w-self.Crop_Size and w0>0):
+                p = x[:,:, h0:hc, w0:wc]
+            # 6
+            elif (h0>0 and h0<h-self.Crop_Size) and w0 >=w-self.Crop_Size:
+                p[:,:,:,0:w-w0] = x[:,:, h0:hc, w0:w]
+                p[:,:,:,w-w0:] = x[:,:, h0:hc, 0:wc-w]
+
+            # 7
+            elif h0 >=h-self.Crop_Size and w0<=0:
+                p[:,:,0:h-h0,0:-w0] = x[:,:, h0:h, w+w0:w]
+                p[:,:,h-h0:,0:-w0] = x[:,:, 0:hc-h, w+w0:w]
+                p[:,:,0:h-h0,-w0:] = x[:,:, h0:h, 0:wc]
+                p[:,:,h-h0:,-w0:] = x[:,:, 0:hc-h, 0:wc]
+            # 8
+            elif h0 >=h-self.Crop_Size and (w0<w-self.Crop_Size and w0>0):
+                p[:,:,0:h-h0,:] = x[:,:, h0:h,w0:wc]
+                p[:,:,h-h0:,:] = x[:,:, 0:hc-h, w0:wc]
+            # 9
+            elif h0 >=h-self.Crop_Size and w0 >=w-self.Crop_Size:
+                p[:,:,0:h-h0,0:w-w0] = x[:,:, h0:h, w0:w]
+                p[:,:,h-h0:,0:w-w0] = x[:,:, 0:hc-h, w0:w]
+                p[:,:,0:h-h0,w-w0:] = x[:,:, h0:h, 0:wc-w]
+                p[:,:,h-h0:,w-w0:] = x[:,:, 0:hc-h, 0:wc-w]
+
+            del x
+            # print('p',p.shape)
+
+            return p
 
 
     def forward(self,
@@ -128,9 +197,10 @@ class CIPSskip(nn.Module):
 
         latent_plus_list=[]
 
+
         # we do random crop here
         if x.shape[-1]>256 and self.training:
-            x = self._crop(x)
+            x = self._crop(x, tileable=self.tileable)
             # print('gema....x.................', x.shape)
 
         # if input_is_latent_plus:
