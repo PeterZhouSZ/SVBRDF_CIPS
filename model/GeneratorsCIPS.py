@@ -207,16 +207,17 @@ class CIPSskip(nn.Module):
         # print(emb.shape)
 
         x = torch.cat([x, emb], 1)
-        # print('x2: ',x.shape)
+        # print('before crop: ',x.shape)
 
         rgb = 0
 
         latent_plus_list=[]
 
         # we do random crop here
-        if x.shape[-1]>256 and self.training:
+        if x.shape[-1]>self.size and self.training:
             x = self._crop(x, tileable=self.tileable)
-            # print('gema....x.................', x.shape)
+
+        # print('after crop: ',x.shape)
 
         # if input_is_latent_plus:
         #     print('------------------------------',latent[0].shape)
@@ -238,8 +239,11 @@ class CIPSskip(nn.Module):
             latent_index += 1
             latent_plus_list.append(latent_plus)
 
+        # print('before final crop:', rgb.shape)
+        if rgb.shape[-1]==self.size and self.training and self.tileable:
+            rgb = self._crop(rgb, tileable=self.tileable)
 
-        # print('rgb shape: ', rgb.shape)
+        # print('after final crop:', rgb.shape)
 
         if return_latents:
             return rgb, latent, None
