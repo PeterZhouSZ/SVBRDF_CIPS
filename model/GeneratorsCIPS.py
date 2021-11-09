@@ -14,7 +14,7 @@ import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, tileable=False, vis_Fourier=False, N_emb=-1, **kwargs):
+                 activation=None, channel_multiplier=2, tileable=False, vis_Fourier=False, N_emb=-1, use_height=False, **kwargs):
         super(CIPSskip, self).__init__()
 
         self.size = size
@@ -76,6 +76,9 @@ class CIPSskip(nn.Module):
         self.Crop_Size = 256
         self.tileable = tileable
         self.vis_Fourier = False
+        self.use_height = use_height
+        if self.use_height:
+            assert img_channels==8, 'image_channel is not 8'
 
     def _crop(self, x, tileable=False):
 
@@ -158,6 +161,59 @@ class CIPSskip(nn.Module):
             return p
 
 
+    def _h_to_N(self, img_in, mode='tangent_space', normal_format='gl', use_input_alpha=False, use_alpha=False, intensity=1.0/3.0, max_intensity=3.0):
+        """Atomic function: Normal (https://docs.substance3d.com/sddoc/normal-172825289.html)
+
+        Args:
+            img_in (tensor): Input image.
+            mode (str, optional): 'tangent space' or 'object space'. Defaults to 'tangent_space'.
+            normal_format (str, optional): 'gl' or 'dx'. Defaults to 'dx'.
+            use_input_alpha (bool, optional): Use input alpha. Defaults to False.
+            use_alpha (bool, optional): Enable the alpha channel. Defaults to False.
+            intensity (float, optional): Normalized height map multiplier on dx, dy. Defaults to 1.0/3.0.
+            max_intensity (float, optional): Maximum height map multiplier. Defaults to 3.0.
+
+        Returns:
+            Tensor: Normal image.
+        """
+        # grayscale_input_check(img_in, "input height field")
+        assert img_in.shape[1]==1, 'should be grayscale image'
+
+        def roll_row(img_in, n):
+            return img_in.roll(-n, 2)
+
+        def roll_col(img_in, n):
+            return img_in.roll(-n, 3)
+
+        def norm(vec): #[B,C,W,H]
+            vec = vec.div(vec.norm(2.0, 1, keepdim=True))
+            return vec
+
+        img_size = img_in.shape[2]
+        # intensity = intensity * max_intensity * img_size / 256.0 # magic number to match sbs, check it later
+        intensity = (intensity * 2.0 - 1.0) * max_intensity * img_size / 256.0 # magic number to match sbs, check it later
+        dx = roll_col(img_in, -1) - img_in
+        dy = roll_row(img_in, -1) - img_in
+        if normal_format == 'gl':
+            img_out = torch.cat((intensity*dx, -intensity*dy, torch.ones_like(dx)), 1)
+        elif normal_format == 'dx':
+            img_out = torch.cat((intensity*dx, intensity*dy, torch.ones_like(dx)), 1)
+        else:
+            img_out = torch.cat((-intensity*dx, intensity*dy, torch.ones_like(dx)), 1)
+        img_out = norm(img_out)
+        # if mode == 'tangent_space':
+        #     img_out = img_out / 2.0 + 0.5
+        
+        if use_alpha == True:
+            if use_input_alpha:
+                img_out = torch.cat([img_out, img_in], dim=1)
+            else:
+                img_out = torch.cat([img_out, torch.ones(img_out.shape[0], 1, img_out.shape[2], img_out.shape[3])], dim=1)
+
+        return img_out
+
+
+
     def forward(self,
                 coords,
                 latent,
@@ -219,9 +275,6 @@ class CIPSskip(nn.Module):
 
         # print('after crop: ',x.shape)
 
-        # if input_is_latent_plus:
-        #     print('------------------------------',latent[0].shape)
-
         x, latent_plus = self.conv1(x, latent if not input_is_latent_plus else latent[0],style_plus=input_is_latent_plus)
         # print('+++++++++++++++++++++++++++++++++++',latent_plus.shape)
         latent_index = 1
@@ -244,15 +297,22 @@ class CIPSskip(nn.Module):
             rgb = self._crop(rgb, tileable=self.tileable)
 
         # print('after final crop:', rgb.shape)
+        height = None
+        if self.use_height:
+            height = rgb[:,0:1,:,:]
+            # print('before height conversion:', rgb.shape)
+            rgb = torch.cat([self._h_to_N(rgb[:,0:1,:,:]), rgb[:,1:,:,:]], dim=1)
+            # print('after height conversion:', rgb.shape)
+
 
         if return_latents:
-            return rgb, latent, None
+            return rgb, latent, None, height
 
         elif return_latents_plus:
-            return rgb, None, latent_plus_list
+            return rgb, None, latent_plus_list, height
 
         else:
-            return rgb, None, None
+            return rgb, None, None, height
 
 
 class CIPSres(nn.Module):

@@ -152,8 +152,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-
-        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _, _ = generator(converted, noise, embed_x = embed_x)
 
         # print('fake image:', fake_img.shape)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
@@ -190,7 +189,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _, _ = generator(converted, noise, embed_x = embed_x)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
         g_loss = g_nonsaturating_loss(fake_pred)
@@ -244,16 +243,26 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
+                            sample, _, _, height = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
                         sample_z = torch.randn(args.n_sample, args.latent, device=device)
-                        sample, _, _ = g_ema(converted_full, [sample_z], embed_x = embed_x)
+                        sample, _, _, height = g_ema(converted_full, [sample_z], embed_x = embed_x)
                         del sample_z
 
                     # print('sample', sample.shape)
                     if sample.shape[1]==10:
+
+                        # save height if needed
+                        if args.use_height:
+                            utils.save_image(
+                                height,
+                                os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H.png'),
+                                nrow=int(args.n_sample ** 0.5),
+                                normalize=True,
+                                # range=(-1, 1),
+                            )
 
                         # save N
                         utils.save_image(
@@ -298,6 +307,15 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
                     if i == 0:
                         if fake_img.shape[1]==10:
+
+                            if args.use_height:
+                                utils.save_image(
+                                    height,
+                                    os.path.join(path, f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_H.png'),
+                                    nrow=int(args.n_sample ** 0.5),
+                                    normalize=True,
+                                    # range=(-1, 1),
+                                )
 
                             # save N
                             utils.save_image(
@@ -431,6 +449,7 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
     parser.add_argument('--tileable', action='store_true')
+    parser.add_argument('--use_height', action='store_true')
 
     # dataset
     parser.add_argument('--batch', type=int, default=4)
@@ -483,8 +502,10 @@ if __name__ == '__main__':
         synchronize()
 
     args.n_mlp = 8
-    args.dis_input_size = args.img_c if args.img2dis else args.img_c+2
-    print('img2dis', args.img2dis, 'dis_input_size', args.dis_input_size)
+    args.dis_input_c = args.img_c if args.img2dis else args.img_c+2
+    # for height map
+    args.dis_input_c = args.dis_input_c+2 if args.use_height else args.dis_input_c
+    print('img2dis', args.img2dis, 'dis_input_size', args.dis_input_c)
 
     args.start_iter = 0
     n_scales = int(math.log(args.size//args.crop, 2)) + 1
@@ -492,16 +513,16 @@ if __name__ == '__main__':
 
     generator = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
                           activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
-                          ).to(device)
+                          use_height=args.use_height).to(device)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
     discriminator = Discriminator(
-        size=args.crop, channel_multiplier=args.channel_multiplier, n_scales=n_scales, input_size=args.dis_input_size,
+        size=args.crop, channel_multiplier=args.channel_multiplier, n_scales=n_scales, input_size=args.dis_input_c,
         n_first_layers=args.n_first_layers,
     ).to(device)
     g_ema = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb
-                      ).to(device)
+                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
+                      use_height=args.use_height).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)
 
