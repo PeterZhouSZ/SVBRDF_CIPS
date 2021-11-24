@@ -1,18 +1,4 @@
-## CIPS -- Official Pytorch Implementation 
 
-of the paper [Image Generators with Conditionally-Independent Pixel Synthesis](https://arxiv.org/abs/2011.13775)
-
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/image-generators-with-conditionally/image-generation-on-lsun-churches-256-x-256)](https://paperswithcode.com/sota/image-generation-on-lsun-churches-256-x-256?p=image-generators-with-conditionally)
-
-![Teaser](doc/teaser_img.jpg)
-
-## Requirements
-
-> conda create -n CIPS python=3.7
-
-> conda activate CIPS
-
-> pip install -r requirements.txt
 
 ## Usage
 
