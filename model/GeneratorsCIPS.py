@@ -293,7 +293,7 @@ class CIPSskip(nn.Module):
 
             # we do random crop here
             if x.shape[-1]>self.size and (self.training or project):
-                print('crop at the top')
+                # print('crop at the top')
                 x = self._crop(x, tileable=self.tileable, center=center_crop)
 
         # use patterns as input
