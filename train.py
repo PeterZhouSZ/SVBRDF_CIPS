@@ -131,13 +131,12 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             print('Done!')
             break
 
-        data = next(loader)
+        real_img = next(loader)
+
         key = np.random.randint(n_scales)
         # real_stack = data[key].to(device)
 
         # real_img, converted = real_stack[:, :-2], real_stack[:, -2:]
-
-        real_img = data
 
         real_img = real_img.to(device)
         converted = converted.to(device)
@@ -152,7 +151,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
 
         # print('fake image:', fake_img.shape)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
@@ -189,7 +188,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
         fake_pred = discriminator(fake, key)
         g_loss = g_nonsaturating_loss(fake_pred)
@@ -243,26 +242,16 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _, _, height = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
+                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
                         sample_z = torch.randn(args.n_sample, args.latent, device=device)
-                        sample, _, _, height = g_ema(converted_full, [sample_z], embed_x = embed_x)
+                        sample, _, _ = g_ema(converted_full, [sample_z], embed_x = embed_x)
                         del sample_z
 
                     # print('sample', sample.shape)
                     if sample.shape[1]==10:
-
-                        # save height if needed
-                        if args.use_height:
-                            utils.save_image(
-                                height,
-                                os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                # range=(-1, 1),
-                            )
 
                         # save N
                         utils.save_image(
@@ -296,6 +285,94 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                             normalize=True,
                             range=(-1, 1),
                         )
+                        
+                        # save N
+                        utils.save_image(
+                            real_img[:,0:3,:,:],
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_N.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save D
+                        utils.save_image(
+                            real_img[:,3:6,:,:],
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_D.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save R
+                        utils.save_image(
+                            real_img[:,6:7,:,:].repeat(1,3,1,1),
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_R.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save S
+                        utils.save_image(
+                            real_img[:,7:10,:,:],
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_S.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+
+                    # print('sample', sample.shape)
+                    elif sample.shape[1]==5:
+
+                        # save N
+                        utils.save_image(
+                            sample[:,0:1,:,:].repeat(1,3,1,1),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save D
+                        utils.save_image(
+                            sample[:,1:4,:,:],
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_D.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save R
+                        utils.save_image(
+                            sample[:,4:5,:,:].repeat(1,3,1,1),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_R.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+
+
+                        # save H
+                        utils.save_image(
+                            real_img[:,0:1,:,:].repeat(1,3,1,1),
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_H.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save D
+                        utils.save_image(
+                            real_img[:,1:4,:,:],
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_D.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save R
+                        utils.save_image(
+                            real_img[:,4:5,:,:].repeat(1,3,1,1),
+                            os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_R.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+
                     else:
                         utils.save_image(
                             sample,
@@ -305,105 +382,15 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                             range=(-1, 1),
                         )
 
-                    if i == 0:
-                        if fake_img.shape[1]==10:
-
-                            if args.use_height:
-                                utils.save_image(
-                                    height,
-                                    os.path.join(path, f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_H.png'),
-                                    nrow=int(args.n_sample ** 0.5),
-                                    normalize=True,
-                                    # range=(-1, 1),
-                                )
-
-                            # save N
-                            utils.save_image(
-                                fake_img[:,0:3,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_N.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save D
-                            utils.save_image(
-                                fake_img[:,3:6,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_D.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save R
-                            utils.save_image(
-                                fake_img[:,6:7,:,:].repeat(1,3,1,1),
-                                os.path.join(path,f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_R.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save S
-                            utils.save_image(
-                                fake_img[:,7:10,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}_S.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-
-
-                            # save N
-                            utils.save_image(
-                                real_img[:,0:3,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_N.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save D
-                            utils.save_image(
-                                real_img[:,3:6,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_D.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save R
-                            utils.save_image(
-                                real_img[:,6:7,:,:].repeat(1,3,1,1),
-                                os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_R.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-                            # save S
-                            utils.save_image(
-                                real_img[:,7:10,:,:],
-                                os.path.join(path,f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}_S.png'),
-                                nrow=int(args.n_sample ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-
-                        else:
-                            utils.save_image(
-                                fake_img,
-                                os.path.join(
-                                    path,
-                                    f'outputs/{args.output_dir}/images/fake_patch_{str(key)}_{str(i).zfill(6)}.png'),
-                                nrow=int(fake_img.size(0) ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
-
-                            utils.save_image(
-                                real_img,
-                                os.path.join(
-                                    path,
-                                    f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}.png'),
-                                nrow=int(real_img.size(0) ** 0.5),
-                                normalize=True,
-                                range=(-1, 1),
-                            )
+                        utils.save_image(
+                            real_img,
+                            os.path.join(
+                                path,
+                                f'outputs/{args.output_dir}/images/real_patch_{str(key)}_{str(i).zfill(6)}.png'),
+                            nrow=int(real_img.size(0) ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
 
             if i % args.save_checkpoint_frequency == 0:
                 torch.save(
@@ -418,22 +405,25 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                         path,
                         f'outputs/{args.output_dir}/checkpoints/{str(i).zfill(6)}.pt'),
                 )
-                # if i > 0:
-                #     cur_metrics = calculate_fid(g_ema, fid_dataset=fid_dataset, bs=args.fid_batch, size=args.coords_size,
-                #                                 num_batches=args.fid_samples//args.fid_batch, latent_size=args.latent,
-                #                                 save_dir=args.path_fid, integer_values=args.coords_integer_values)
-                #     writer.add_scalar("fid", cur_metrics['frechet_inception_distance'], i)
-                #     print(i, "fid",  cur_metrics['frechet_inception_distance'])
+
+                torch.save(
+                    {
+                        'g_ema': g_ema.state_dict(),
+                    },
+                    os.path.join(
+                        path,
+                        f'outputs/{args.output_dir}/checkpoints_eval/{str(i).zfill(6)}.pt'),
+                )
 
 
 if __name__ == '__main__':
-    device = 'cuda'
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument('path', type=str)
     parser.add_argument('--output_dir', type=str)
     parser.add_argument('--out_path', type=str, default='.')
+    parser.add_argument('--device', type=str, default='cuda')
 
     # fid
     parser.add_argument('--fid_samples', type=int, default=50000)
@@ -449,13 +439,12 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
     parser.add_argument('--tileable', action='store_true')
-    parser.add_argument('--use_height', action='store_true')
 
     # dataset
     parser.add_argument('--batch', type=int, default=4)
     parser.add_argument('--num_workers', type=int, default=32)
     parser.add_argument('--to_crop', action='store_true')
-    parser.add_argument('--crop', type=int, default=256)
+    parser.add_argument('--crop_size', type=int, default=256)
     parser.add_argument('--coords_size', type=int, default=256)
 
     # Generator params
@@ -466,6 +455,7 @@ if __name__ == '__main__':
     parser.add_argument('--fc_dim', type=int, default=512)
     parser.add_argument('--latent', type=int, default=512)
     parser.add_argument('--activation', type=str, default=None)
+    parser.add_argument('--in_pat_path', type=str, default='')
     # parser.add_argument('--embed', type=str, default='LFF')
     parser.add_argument('--channel_multiplier', type=int, default=2)
     parser.add_argument('--mixing', type=float, default=0.)
@@ -481,6 +471,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     path = args.out_path
 
+    device = args.device
+
+
+    print(f'coords_in: {args.coords_size} --> crop at beginning is {args.coords_size>args.size} --> generator_size: {args.size} -->  crop at end is {args.size>args.crop_size} --> crop_real_size: {args.crop_size}')
+    print('device', device)
+
     Generator = getattr(model, args.Generator)
     print('Generator', Generator)
     Discriminator = getattr(model, args.Discriminator)
@@ -488,10 +484,11 @@ if __name__ == '__main__':
 
     os.makedirs(os.path.join(path, 'outputs', args.output_dir, 'images'), exist_ok=True)
     os.makedirs(os.path.join(path, 'outputs', args.output_dir, 'checkpoints'), exist_ok=True)
+    os.makedirs(os.path.join(path, 'outputs', args.output_dir, 'checkpoints_eval'), exist_ok=True)
     args.logdir = os.path.join(path, 'tensorboard', args.output_dir)
     os.makedirs(args.logdir, exist_ok=True)
-    args.path_fid = os.path.join(path, 'fid', args.output_dir)
-    os.makedirs(args.path_fid, exist_ok=True)
+    # args.path_fid = os.path.join(path, 'fid', args.output_dir)
+    # os.makedirs(args.path_fid, exist_ok=True)
 
     n_gpu = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
     args.distributed = n_gpu > 1
@@ -504,25 +501,25 @@ if __name__ == '__main__':
     args.n_mlp = 8
     args.dis_input_c = args.img_c if args.img2dis else args.img_c+2
     # for height map
-    args.dis_input_c = args.dis_input_c+2 if args.use_height else args.dis_input_c
+    # args.dis_input_c = args.dis_input_c+2 if args.use_height else args.dis_input_c
     print('img2dis', args.img2dis, 'dis_input_size', args.dis_input_c)
 
     args.start_iter = 0
-    n_scales = int(math.log(args.size//args.crop, 2)) + 1
+    n_scales = int(math.log(args.size//args.crop_size, 2)) + 1
     print('n_scales', n_scales)
 
-    generator = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
+    generator = Generator(img_channels = args.img_c, size=args.size, crop_size=args.crop_size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
                           activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
-                          use_height=args.use_height).to(device)
+                          in_pat_path=args.in_pat_path).to(device)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
     discriminator = Discriminator(
-        size=args.crop, channel_multiplier=args.channel_multiplier, n_scales=n_scales, input_size=args.dis_input_c,
+        size=args.crop_size, channel_multiplier=args.channel_multiplier, n_scales=n_scales, input_size=args.dis_input_c,
         n_first_layers=args.n_first_layers,
     ).to(device)
-    g_ema = Generator(img_channels = args.img_c, size=args.size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
+    g_ema = Generator(img_channels = args.img_c, size=args.size, crop_size=args.crop_size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
                       activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
-                      use_height=args.use_height).to(device)
+                      in_pat_path=args.in_pat_path).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)
 
@@ -577,21 +574,18 @@ if __name__ == '__main__':
             broadcast_buffers=False,
         )
 
-    transform = transforms.Compose(
-        [
-            # transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True),
-        ]
-    )
-    transform_fid = transforms.Compose([
-                                       transforms.ToTensor(),
-                                       transforms.Lambda(lambda x: x.mul_(255.).byte())])
+    # transform = transforms.Compose(
+    #     [
+    #         transforms.ToTensor(),
+    #     ]
+    # )
+    # transform_fid = transforms.Compose([
+    #                                    transforms.ToTensor(),
+    #                                    transforms.Lambda(lambda x: x.mul_(255.).byte())])
 
-    dataset = MultiScaleDataset(args.path, transform=transform, resolution=args.coords_size, crop_size=args.crop,
-                                integer_values=args.coords_integer_values, to_crop=args.to_crop)
-    fid_dataset = ImageDataset(args.path, transform=transform_fid, resolution=args.coords_size, to_crop=args.to_crop)
-    fid_dataset.length = args.fid_samples
+    dataset = MultiScaleDataset(args.path, crop_size=args.crop_size, integer_values=args.coords_integer_values)
+    # fid_dataset = ImageDataset(args.path, transform=transform_fid, resolution=args.coords_size, to_crop=args.to_crop)
+    # fid_dataset.length = args.fid_samples
     loader = data.DataLoader(
         dataset,
         batch_size=args.batch,

@@ -67,6 +67,7 @@ class Discriminator(nn.Module):
         out = self.final_conv(out)
 
         out = out.view(batch, -1)
+
         out = self.final_linear(out)
 
         return out

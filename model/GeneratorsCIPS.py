@@ -3,26 +3,35 @@ __all__ = ['CIPSskip',
            ]
 
 import math
+import os
 
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+from PIL import Image
 from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock, Myembed
+from torchvision import transforms
 
 import random
 
 class CIPSskip(nn.Module):
-    def __init__(self, img_channels=3, size=256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, tileable=False, vis_Fourier=False, N_emb=-1, use_height=False, **kwargs):
+    def __init__(self, img_channels=3, size=256, crop_size = 256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
+                 activation=None, channel_multiplier=2, tileable=False, N_emb=-1, in_pat_path = '', **kwargs):
         super(CIPSskip, self).__init__()
-
+        self.use_pat = True if in_pat_path != '' else False
         self.size = size
+        self.in_pat_path = in_pat_path
         demodulate = True
         self.demodulate = demodulate
+
         if N_emb==-1:
-            self.lff = LFF(hidden_size)
-            c_emb = hidden_size
+            if self.use_pat:
+                # read patterns
+                self.in_pats = self._read_patterns()
+                c_emb = self.in_pats.shape[0]
+            else:
+                self.lff = LFF(hidden_size)
+                c_emb = hidden_size
         else:
             c_emb = N_emb*4
 
@@ -42,6 +51,7 @@ class CIPSskip(nn.Module):
 
         # multiplier = 2
         in_channels = int(self.channels[0])
+        print(hidden_size+c_emb, in_channels)
         self.conv1 = StyledConv(int(hidden_size+c_emb), in_channels, 1, style_dim, demodulate=demodulate,
                                 activation=activation)
 
@@ -73,37 +83,62 @@ class CIPSskip(nn.Module):
             )
 
         self.style = nn.Sequential(*layers)
-        self.Crop_Size = 256
+        self.crop_size = crop_size
         self.tileable = tileable
-        self.vis_Fourier = False
-        self.use_height = use_height
-        if self.use_height:
-            assert img_channels==8, 'image_channel is not 8'
 
-    def _crop(self, x, tileable=False):
+
+        # self.project = project
+    def _read_patterns(self):
+        patterns = []
+        for pat_path in os.listdir(self.in_pat_path):
+            if pat_path.split('.')[1] in ['png', 'jpeg', 'jpg']:
+                pattern = Image.open(os.path.join(self.in_pat_path, pat_path))
+
+                transform = transforms.Compose(
+                    [
+                        # transforms.Resize((self.size, self.size)),
+                        transforms.ToTensor(),
+                        # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True),
+                    ]
+                )
+
+                patterns.append(transform(pattern))
+
+        patterns = torch.cat(patterns, dim=0)
+        print(patterns.shape)
+        print(patterns[:,0,0])
+        return patterns
+
+    def _crop(self, x, tileable=False, center=False):
 
         b,c,h,w = x.shape
+        if center:
+            w0 = (w-self.crop_size)*0.5
+            h0 = (h-self.crop_size)*0.5
+            w0 = int(w0)
+            h0 = int(h0)
+            # print('center: ', w0, h0)
+            if w0+self.crop_size>w or h0+self.crop_size>h:
+                raise ValueError('value error of w0')
+
+            return x[:,:,w0:w0+self.size,h0:h0+self.size]
+
         if not tileable:
-            w0 = random.randint(0,w-self.Crop_Size)
-            h0 = random.randint(0,h-self.Crop_Size)
-            if w0+self.Crop_Size>w or h0+self.Crop_Size>h:
+            w0 = random.randint(0,w-self.crop_size)
+            h0 = random.randint(0,h-self.crop_size)
+            if w0+self.crop_size>w or h0+self.crop_size>h:
                 raise ValueError('value error of w0')
 
             return x[:,:,w0:w0+256,h0:h0+256]
 
         else:
-            w0 = random.randint(-self.Crop_Size,w)
-            h0 = random.randint(-self.Crop_Size,h)
+            w0 = random.randint(-self.crop_size,w)
+            h0 = random.randint(-self.crop_size,h)
 
-            # print('x shape', x.shape)
-            # w0 = 500
-            # h0 = -60
+            wc = w0 + self.crop_size
+            hc = h0 + self.crop_size
 
-            wc = w0 + self.Crop_Size
-            hc = h0 + self.Crop_Size
-
-            p = torch.zeros((b,c,self.Crop_Size,self.Crop_Size), device='cuda')
-            # print('p shape', p.shape)
+            p = torch.zeros((b,c,self.crop_size,self.crop_size), device='cuda')
 
             # seperate crop and stitch them manually
             # [7 | 8 | 9]
@@ -116,50 +151,48 @@ class CIPSskip(nn.Module):
                 p[:,:,0:-h0,-w0:] = x[:,:, h+h0:h, 0:wc]
                 p[:,:,-h0:,-w0:] = x[:,:, 0:hc, 0:wc]
             # 2
-            elif h0<=0 and (w0<w-self.Crop_Size and w0>0):
+            elif h0<=0 and (w0<w-self.crop_size and w0>0):
                 p[:,:,0:-h0,:] = x[:,:, h+h0:h,w0:wc]
                 p[:,:,-h0:,:] = x[:,:, 0:hc, w0:wc]
             # 3
-            elif h0<=0 and w0 >=w-self.Crop_Size:
+            elif h0<=0 and w0 >=w-self.crop_size:
                 p[:,:,0:-h0,0:w-w0] = x[:,:, h+h0:h, w0:w]
                 p[:,:,-h0:,0:w-w0] = x[:,:, 0:hc, w0:w]
                 p[:,:,0:-h0,w-w0:] = x[:,:, h+h0:h, 0:wc-w]
                 p[:,:,-h0:,w-w0:] = x[:,:, 0:hc, 0:wc-w]
 
             # 4
-            elif (h0>0 and h0<h-self.Crop_Size) and w0<=0:
+            elif (h0>0 and h0<h-self.crop_size) and w0<=0:
                 p[:,:,:,0:-w0] = x[:,:, h0:hc, w+w0:w]
                 p[:,:,:,-w0:] = x[:,:, h0:hc, 0:wc]
             # 5
-            elif (h0>0 and h0<h-self.Crop_Size) and (w0<w-self.Crop_Size and w0>0):
+            elif (h0>0 and h0<h-self.crop_size) and (w0<w-self.crop_size and w0>0):
                 p = x[:,:, h0:hc, w0:wc]
             # 6
-            elif (h0>0 and h0<h-self.Crop_Size) and w0 >=w-self.Crop_Size:
+            elif (h0>0 and h0<h-self.crop_size) and w0 >=w-self.crop_size:
                 p[:,:,:,0:w-w0] = x[:,:, h0:hc, w0:w]
                 p[:,:,:,w-w0:] = x[:,:, h0:hc, 0:wc-w]
 
             # 7
-            elif h0 >=h-self.Crop_Size and w0<=0:
+            elif h0 >=h-self.crop_size and w0<=0:
                 p[:,:,0:h-h0,0:-w0] = x[:,:, h0:h, w+w0:w]
                 p[:,:,h-h0:,0:-w0] = x[:,:, 0:hc-h, w+w0:w]
                 p[:,:,0:h-h0,-w0:] = x[:,:, h0:h, 0:wc]
                 p[:,:,h-h0:,-w0:] = x[:,:, 0:hc-h, 0:wc]
             # 8
-            elif h0 >=h-self.Crop_Size and (w0<w-self.Crop_Size and w0>0):
+            elif h0 >=h-self.crop_size and (w0<w-self.crop_size and w0>0):
                 p[:,:,0:h-h0,:] = x[:,:, h0:h,w0:wc]
                 p[:,:,h-h0:,:] = x[:,:, 0:hc-h, w0:wc]
             # 9
-            elif h0 >=h-self.Crop_Size and w0 >=w-self.Crop_Size:
+            elif h0 >=h-self.crop_size and w0 >=w-self.crop_size:
                 p[:,:,0:h-h0,0:w-w0] = x[:,:, h0:h, w0:w]
                 p[:,:,h-h0:,0:w-w0] = x[:,:, 0:hc-h, w0:w]
                 p[:,:,0:h-h0,w-w0:] = x[:,:, h0:h, 0:wc-w]
                 p[:,:,h-h0:,w-w0:] = x[:,:, 0:hc-h, 0:wc-w]
 
             del x
-            # print('p',p.shape)
 
             return p
-
 
     def _h_to_N(self, img_in, mode='tangent_space', normal_format='gl', use_input_alpha=False, use_alpha=False, intensity=1.0/3.0, max_intensity=3.0):
         """Atomic function: Normal (https://docs.substance3d.com/sddoc/normal-172825289.html)
@@ -212,8 +245,6 @@ class CIPSskip(nn.Module):
 
         return img_out
 
-
-
     def forward(self,
                 coords,
                 latent,
@@ -224,7 +255,10 @@ class CIPSskip(nn.Module):
                 truncation_latent=None,
                 input_is_latent=False,
                 input_is_latent_plus=False,
-                embed_x=None
+                embed_x=None,
+                project=False,
+                center_crop=False,
+                vis_embed=False,
                 ):
 
         latent = latent[0]
@@ -237,44 +271,38 @@ class CIPSskip(nn.Module):
 
         batch_size, _, w, h = coords.shape
 
-        if embed_x is not None:
-            x = embed_x.repeat(batch_size,1,1,1)
+        # if not using patterns as input
+        if not self.use_pat:
+            if embed_x is not None:
+                x = embed_x.repeat(batch_size,1,1,1)
+            else:
+                x = self.lff(coords)
+
+            if self.training and w == h == self.size:
+                emb = self.emb(x)
+                # print('train emb: ',emb.shape)
+            else:
+                # print('gema...............')
+                emb = F.grid_sample(
+                    self.emb.input.expand(batch_size, -1, -1, -1),
+                    coords.permute(0, 2, 3, 1).contiguous(),
+                    padding_mode='border', mode='bilinear',
+                )
+
+            x = torch.cat([x, emb], 1)
+
+            # we do random crop here
+            if x.shape[-1]>self.size and (self.training or project):
+                print('crop at the top')
+                x = self._crop(x, tileable=self.tileable, center=center_crop)
+
+        # use patterns as input
         else:
-            x = self.lff(coords)
+            x = self.in_pats
 
-        # if self.vis_Fourier:
-        #     Fourier = x[0,0,:,:].clone()
-
-        # print('x1: ',x.shape)
-
-        if self.training and w == h == self.size:
-            emb = self.emb(x)
-            # print('train emb: ',emb.shape)
-        else:
-            # print('gema...............')
-            emb = F.grid_sample(
-                self.emb.input.expand(batch_size, -1, -1, -1),
-                coords.permute(0, 2, 3, 1).contiguous(),
-                padding_mode='border', mode='bilinear',
-            )
-            # print('gema emb: ',emb.shape)
-
-        # print(x.shape)
-        # print(emb.shape)
-
-        x = torch.cat([x, emb], 1)
-        # print('before crop: ',x.shape)
 
         rgb = 0
-
         latent_plus_list=[]
-
-        # we do random crop here
-        if x.shape[-1]>self.size and self.training:
-            x = self._crop(x, tileable=self.tileable)
-
-        # print('after crop: ',x.shape)
-
         x, latent_plus = self.conv1(x, latent if not input_is_latent_plus else latent[0],style_plus=input_is_latent_plus)
         # print('+++++++++++++++++++++++++++++++++++',latent_plus.shape)
         latent_index = 1
@@ -293,26 +321,23 @@ class CIPSskip(nn.Module):
             latent_plus_list.append(latent_plus)
 
         # print('before final crop:', rgb.shape)
-        if rgb.shape[-1]==self.size and self.training and self.tileable:
-            rgb = self._crop(rgb, tileable=self.tileable)
+        if rgb.shape[-1]>self.crop_size and (self.training or project):
+            # print('crop at the end')
+            rgb = self._crop(rgb, tileable=self.tileable, center=center_crop)
 
-        # print('after final crop:', rgb.shape)
-        height = None
-        if self.use_height:
-            height = rgb[:,0:1,:,:]
-            # print('before height conversion:', rgb.shape)
-            rgb = torch.cat([self._h_to_N(rgb[:,0:1,:,:]), rgb[:,1:,:,:]], dim=1)
-            # print('after height conversion:', rgb.shape)
+
+        if vis_embed:
+            return x_embed
 
 
         if return_latents:
-            return rgb, latent, None, height
+            return rgb, latent, None
 
         elif return_latents_plus:
-            return rgb, None, latent_plus_list, height
+            return rgb, None, latent_plus_list
 
         else:
-            return rgb, None, None, height
+            return rgb, None, None
 
 
 class CIPSres(nn.Module):
