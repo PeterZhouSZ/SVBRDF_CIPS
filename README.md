@@ -24,8 +24,9 @@ This will convert images to jpeg and pre-resizes it. `MDB_PATH =./Data/ValenTrai
 
 Or download the MDB file of Valentin Dataset [link](https://drive.google.com/drive/folders/1xFAdBcJiC9KLkPjEC5UkcjEa1OcLTXEk?usp=sharing) and save it to `./Data/ValenTrain/256`
 
-To prepare bricks dataset, download from this link: [link](https://drive.google.com/file/d/1H1dFjwZUZ1eW_2JUnmW0DwNgHlOYnLBo/view?usp=sharing) and save it to `./Data/`
+To download bricks dataset, download from this link: [link](https://drive.google.com/file/d/1H1dFjwZUZ1eW_2JUnmW0DwNgHlOYnLBo/view?usp=sharing) and save it to `./Data/`
 
+To download bricks dataset with processed patterns, please download from this link:
 
 2) Training commands:
 
