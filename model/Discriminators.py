@@ -9,10 +9,15 @@ from .blocks import ConvLayer, ResBlock, EqualLinear
 
 
 class Discriminator(nn.Module):
-    def __init__(self, size, channel_multiplier=2, blur_kernel=[1, 3, 3, 1], input_size=3, n_first_layers=0, **kwargs):
+    def __init__(self, size, channel_multiplier=2, blur_kernel=[1, 3, 3, 1], input_size=3, n_first_layers=0, in_pat=None, in_pat_c=0, **kwargs):
         super().__init__()
 
-        self.input_size = input_size
+        self.in_pat=in_pat
+        if self.in_pat is not None:
+
+            self.input_size = input_size + in_pat_c
+        else:
+            self.input_size = input_size
 
         channels = {
             4: 512,
@@ -26,7 +31,7 @@ class Discriminator(nn.Module):
             1024: 16 * channel_multiplier,
         }
 
-        convs = [ConvLayer(input_size, channels[size], 1)]
+        convs = [ConvLayer(self.input_size, channels[size], 1)]
         convs.extend([ConvLayer(channels[size], channels[size], 3) for _ in range(n_first_layers)])
 
         log_size = int(math.log(size, 2))
@@ -51,7 +56,12 @@ class Discriminator(nn.Module):
             EqualLinear(channels[4], 1),
         )
 
-    def forward(self, input, key=None):
+    def forward(self, input, key=None, in_pats=None):
+        if in_pats is not None:
+            # print('dis input:', input.shape)
+            # print('dis in_pats:', in_pats.shape)
+            input = torch.cat((input, in_pats), dim=1)
+
         out = self.convs(input)
 
         batch, channel, height, width = out.shape

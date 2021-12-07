@@ -9,29 +9,30 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from PIL import Image
-from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock, Myembed
+from .blocks import ConstantInput, LFF, StyledConv, ToRGB, PixelNorm, EqualLinear, StyledResBlock, Myembed, mycrop, PatembNet
 from torchvision import transforms
 
 import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, crop_size = 256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, tileable=False, N_emb=-1, in_pat_path = '', **kwargs):
+                 activation=None, channel_multiplier=2, tileable=False, N_emb=-1, in_pat=None, in_pat_c=0, emb_pat='net_conv', **kwargs):
         super(CIPSskip, self).__init__()
-        self.use_pat = True if in_pat_path != '' else False
+
         self.size = size
-        self.in_pat_path = in_pat_path
         demodulate = True
         self.demodulate = demodulate
+        self.in_pat = in_pat
+        self.in_pat_c = in_pat_c
+        self.emb_pat = emb_pat
+
+        if 'net' in self.emb_pat:
+            self.patnet = PatembNet(emb_pat,self.in_pat_c)
+            self.in_pat_c = 32 # hard code emb_pat if use network 
 
         if N_emb==-1:
-            if self.use_pat:
-                # read patterns
-                self.in_pats = self._read_patterns()
-                c_emb = self.in_pats.shape[0]
-            else:
-                self.lff = LFF(hidden_size)
-                c_emb = hidden_size
+            self.lff = LFF(hidden_size)
+            c_emb = hidden_size
         else:
             c_emb = N_emb*4
 
@@ -50,9 +51,17 @@ class CIPSskip(nn.Module):
         }
 
         # multiplier = 2
+        inc = int(hidden_size+c_emb)
+        if in_pat is None:
+            assert in_pat_c==0, 'pat channel must be 0 if NOT use in_pat'
+
+        elif in_pat == 'top':
+            inc += self.in_pat_c
+
         in_channels = int(self.channels[0])
-        print(hidden_size+c_emb, in_channels)
-        self.conv1 = StyledConv(int(hidden_size+c_emb), in_channels, 1, style_dim, demodulate=demodulate,
+        print('1st layer: ',inc, in_channels)
+
+        self.conv1 = StyledConv(inc, in_channels, 1, style_dim, demodulate=demodulate,
                                 activation=activation)
 
         self.linears = nn.ModuleList()
@@ -63,10 +72,22 @@ class CIPSskip(nn.Module):
         self.to_rgb_stride = 2
         for i in range(0, self.log_size - 1):
             out_channels = self.channels[i]
-            self.linears.append(StyledConv(in_channels, out_channels, 1, style_dim,
-                                           demodulate=demodulate, activation=activation))
-            self.linears.append(StyledConv(out_channels, out_channels, 1, style_dim,
-                                           demodulate=demodulate, activation=activation))
+
+            # add input patterns all layers
+            if in_pat=='all':
+                print('all: ', in_channels + self.in_pat_c, 'all2: ', out_channels + self.in_pat_c)
+                self.linears.append(StyledConv(in_channels + self.in_pat_c, out_channels, 1, style_dim,
+                                               demodulate=demodulate, activation=activation))
+                self.linears.append(StyledConv(out_channels + self.in_pat_c, out_channels, 1, style_dim,
+                                               demodulate=demodulate, activation=activation))   
+
+            else:
+                print('all: ', in_channels, 'all2: ', out_channels)
+                self.linears.append(StyledConv(in_channels, out_channels, 1, style_dim,
+                                               demodulate=demodulate, activation=activation))
+                self.linears.append(StyledConv(out_channels, out_channels, 1, style_dim,
+                                               demodulate=demodulate, activation=activation))
+
             self.to_rgbs.append(ToRGB(out_channels, img_channels, style_dim, upsample=False))
 
             in_channels = out_channels
@@ -85,114 +106,6 @@ class CIPSskip(nn.Module):
         self.style = nn.Sequential(*layers)
         self.crop_size = crop_size
         self.tileable = tileable
-
-
-        # self.project = project
-    def _read_patterns(self):
-        patterns = []
-        for pat_path in os.listdir(self.in_pat_path):
-            if pat_path.split('.')[1] in ['png', 'jpeg', 'jpg']:
-                pattern = Image.open(os.path.join(self.in_pat_path, pat_path))
-
-                transform = transforms.Compose(
-                    [
-                        # transforms.Resize((self.size, self.size)),
-                        transforms.ToTensor(),
-                        # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True),
-                    ]
-                )
-
-                patterns.append(transform(pattern))
-
-        patterns = torch.cat(patterns, dim=0)
-        print(patterns.shape)
-        print(patterns[:,0,0])
-        return patterns
-
-    def _crop(self, x, tileable=False, center=False):
-
-        b,c,h,w = x.shape
-        if center:
-            w0 = (w-self.crop_size)*0.5
-            h0 = (h-self.crop_size)*0.5
-            w0 = int(w0)
-            h0 = int(h0)
-            # print('center: ', w0, h0)
-            if w0+self.crop_size>w or h0+self.crop_size>h:
-                raise ValueError('value error of w0')
-
-            return x[:,:,w0:w0+self.size,h0:h0+self.size]
-
-        if not tileable:
-            w0 = random.randint(0,w-self.crop_size)
-            h0 = random.randint(0,h-self.crop_size)
-            if w0+self.crop_size>w or h0+self.crop_size>h:
-                raise ValueError('value error of w0')
-
-            return x[:,:,w0:w0+256,h0:h0+256]
-
-        else:
-            w0 = random.randint(-self.crop_size,w)
-            h0 = random.randint(-self.crop_size,h)
-
-            wc = w0 + self.crop_size
-            hc = h0 + self.crop_size
-
-            p = torch.zeros((b,c,self.crop_size,self.crop_size), device='cuda')
-
-            # seperate crop and stitch them manually
-            # [7 | 8 | 9]
-            # [4 | 5 | 6]
-            # [1 | 2 | 3]
-            # 1
-            if h0<=0 and w0<=0:
-                p[:,:,0:-h0,0:-w0] = x[:,:, h+h0:h, w+w0:w]
-                p[:,:,-h0:,0:-w0] = x[:,:, 0:hc, w+w0:w]
-                p[:,:,0:-h0,-w0:] = x[:,:, h+h0:h, 0:wc]
-                p[:,:,-h0:,-w0:] = x[:,:, 0:hc, 0:wc]
-            # 2
-            elif h0<=0 and (w0<w-self.crop_size and w0>0):
-                p[:,:,0:-h0,:] = x[:,:, h+h0:h,w0:wc]
-                p[:,:,-h0:,:] = x[:,:, 0:hc, w0:wc]
-            # 3
-            elif h0<=0 and w0 >=w-self.crop_size:
-                p[:,:,0:-h0,0:w-w0] = x[:,:, h+h0:h, w0:w]
-                p[:,:,-h0:,0:w-w0] = x[:,:, 0:hc, w0:w]
-                p[:,:,0:-h0,w-w0:] = x[:,:, h+h0:h, 0:wc-w]
-                p[:,:,-h0:,w-w0:] = x[:,:, 0:hc, 0:wc-w]
-
-            # 4
-            elif (h0>0 and h0<h-self.crop_size) and w0<=0:
-                p[:,:,:,0:-w0] = x[:,:, h0:hc, w+w0:w]
-                p[:,:,:,-w0:] = x[:,:, h0:hc, 0:wc]
-            # 5
-            elif (h0>0 and h0<h-self.crop_size) and (w0<w-self.crop_size and w0>0):
-                p = x[:,:, h0:hc, w0:wc]
-            # 6
-            elif (h0>0 and h0<h-self.crop_size) and w0 >=w-self.crop_size:
-                p[:,:,:,0:w-w0] = x[:,:, h0:hc, w0:w]
-                p[:,:,:,w-w0:] = x[:,:, h0:hc, 0:wc-w]
-
-            # 7
-            elif h0 >=h-self.crop_size and w0<=0:
-                p[:,:,0:h-h0,0:-w0] = x[:,:, h0:h, w+w0:w]
-                p[:,:,h-h0:,0:-w0] = x[:,:, 0:hc-h, w+w0:w]
-                p[:,:,0:h-h0,-w0:] = x[:,:, h0:h, 0:wc]
-                p[:,:,h-h0:,-w0:] = x[:,:, 0:hc-h, 0:wc]
-            # 8
-            elif h0 >=h-self.crop_size and (w0<w-self.crop_size and w0>0):
-                p[:,:,0:h-h0,:] = x[:,:, h0:h,w0:wc]
-                p[:,:,h-h0:,:] = x[:,:, 0:hc-h, w0:wc]
-            # 9
-            elif h0 >=h-self.crop_size and w0 >=w-self.crop_size:
-                p[:,:,0:h-h0,0:w-w0] = x[:,:, h0:h, w0:w]
-                p[:,:,h-h0:,0:w-w0] = x[:,:, 0:hc-h, w0:w]
-                p[:,:,0:h-h0,w-w0:] = x[:,:, h0:h, 0:wc-w]
-                p[:,:,h-h0:,w-w0:] = x[:,:, 0:hc-h, 0:wc-w]
-
-            del x
-
-            return p
 
     def _h_to_N(self, img_in, mode='tangent_space', normal_format='gl', use_input_alpha=False, use_alpha=False, intensity=1.0/3.0, max_intensity=3.0):
         """Atomic function: Normal (https://docs.substance3d.com/sddoc/normal-172825289.html)
@@ -248,58 +161,60 @@ class CIPSskip(nn.Module):
     def forward(self,
                 coords,
                 latent,
+                rand0=None,
+                in_pats=None,
                 latent_plus=None,
                 return_latents=False,
                 return_latents_plus=False,
-                truncation=1,
-                truncation_latent=None,
                 input_is_latent=False,
                 input_is_latent_plus=False,
                 embed_x=None,
-                project=False,
+                crop=False,
                 center_crop=False,
-                vis_embed=False,
                 ):
 
-        latent = latent[0]
-
-        if truncation < 1:
-            latent = truncation_latent + truncation * (latent - truncation_latent)
-
-        if not input_is_latent and not input_is_latent_plus:
-            latent = self.style(latent)
-
+        # if in_pats is not None and '':
+        #     assert in_pats.shape[1]==self.in_pat_c, '# of input channel not match'
+        
         batch_size, _, w, h = coords.shape
 
-        # if not using patterns as input
-        if not self.use_pat:
-            if embed_x is not None:
-                x = embed_x.repeat(batch_size,1,1,1)
-            else:
-                x = self.lff(coords)
+        latent = self.style(latent[0]) if not input_is_latent and not input_is_latent_plus else latent[0]
+        x = embed_x.repeat(batch_size,1,1,1) if embed_x is not None else self.lff(coords)
 
-            if self.training and w == h == self.size:
-                emb = self.emb(x)
-                # print('train emb: ',emb.shape)
-            else:
-                # print('gema...............')
-                emb = F.grid_sample(
-                    self.emb.input.expand(batch_size, -1, -1, -1),
-                    coords.permute(0, 2, 3, 1).contiguous(),
-                    padding_mode='border', mode='bilinear',
-                )
-
-            x = torch.cat([x, emb], 1)
-
-            # we do random crop here
-            if x.shape[-1]>self.size and (self.training or project):
-                # print('crop at the top')
-                x = self._crop(x, tileable=self.tileable, center=center_crop)
-
-        # use patterns as input
+        if self.training and w == h == self.size:
+            emb = self.emb(x)
         else:
-            x = self.in_pats
+            # print('gema...............')
+            emb = F.grid_sample(
+                self.emb.input.expand(batch_size, -1, -1, -1),
+                coords.permute(0, 2, 3, 1).contiguous(),
+                padding_mode='border', mode='bilinear',
+            )
 
+        x = torch.cat([x, emb], 1)
+
+        # crop coords
+        if x.shape[-1]>self.size and (self.training or crop):
+            x = mycrop(x, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
+            # print('crop coords', x.shape)
+
+        # pat emb net
+        if 'net' in self.emb_pat:
+            in_pats = self.patnet(in_pats)
+
+
+        # crop pats
+        if in_pats.shape[-1]>self.size and (self.training or crop):
+            in_pats = mycrop(in_pats, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
+            # print('crop pat',in_pats.shape)
+
+        assert x.shape[-1]==in_pats.shape[-1],f'shape of x {x.shape[-1]} and in_pat {in_pats.shape[-1]} not match'
+
+        # if pattern to top
+        if self.in_pat=='top':
+            x = torch.cat([x, in_pats],1)
+
+        # print('top in shape (with pattern):', x.shape)
 
         rgb = 0
         latent_plus_list=[]
@@ -311,6 +226,9 @@ class CIPSskip(nn.Module):
         for i in range(self.n_intermediate):
             for j in range(self.to_rgb_stride):
                 # print('G input_is_latent: ', input_is_latent_plus)
+                x = torch.cat([x,in_pats],1) if self.in_pat=='all' else x
+                # print('all in shape (with pattern):', x.shape)
+
                 x, latent_plus = self.linears[i*self.to_rgb_stride + j](x, latent if not input_is_latent_plus else latent[latent_index],style_plus=input_is_latent_plus)
                 latent_index += 1
                 latent_plus_list.append(latent_plus)
@@ -320,24 +238,19 @@ class CIPSskip(nn.Module):
             latent_index += 1
             latent_plus_list.append(latent_plus)
 
-        # print('before final crop:', rgb.shape)
-        if rgb.shape[-1]>self.crop_size and (self.training or project):
-            # print('crop at the end')
-            rgb = self._crop(rgb, tileable=self.tileable, center=center_crop)
-
-
-        if vis_embed:
-            return x_embed
+        # if rgb.shape[-1]>self.crop_size and (self.training or crop):
+        #     print('crop at the end')
+        #     rgb = self._crop(rgb, tileable=self.tileable, center=center_crop)
 
 
         if return_latents:
-            return rgb, latent, None
+            return rgb, latent, None, in_pats
 
         elif return_latents_plus:
-            return rgb, None, latent_plus_list
+            return rgb, None, latent_plus_list, in_pats
 
         else:
-            return rgb, None, None
+            return rgb, None, None, in_pats
 
 
 class CIPSres(nn.Module):

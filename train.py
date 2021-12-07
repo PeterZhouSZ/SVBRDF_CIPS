@@ -19,6 +19,7 @@ from dataset import MultiScaleDataset, ImageDataset
 from distributed import get_rank, synchronize, reduce_loss_dict
 from tensor_transforms import convert_to_coord_format
 
+from model.blocks import mycrop
 
 def data_sampler(dataset, shuffle, distributed):
     if distributed:
@@ -108,7 +109,6 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
     if args.distributed:
         g_module = generator.module
         d_module = discriminator.module
-
     else:
         g_module = generator
         d_module = discriminator
@@ -123,6 +123,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         embed_x = embed_fn(converted[0:1,...])
         print('---------NERF embedding ------', embed_x.shape)
 
+    real_pat_c = 1 if 'net' in args.emb_pat else args.in_pat_c
 
     for idx in pbar:
         i = idx + args.start_iter
@@ -131,34 +132,42 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             print('Done!')
             break
 
-        real_img = next(loader)
+        load_img = next(loader) 
+        in_pats = load_img[:, 0:real_pat_c, :, :].to(device) # [B, load_img_size, H, W]
+        # print('in_pats:', in_pats.shape)
 
-        key = np.random.randint(n_scales)
-        # real_stack = data[key].to(device)
+        # crop images if needed
+        rand0 = None
+        if not args.no_tileable:
+            rand0 = [random.randint(-args.crop_size, load_img.shape[-1]),random.randint(-args.crop_size, load_img.shape[-1])]
+        else:
+            rand0 = [random.randint(0,load_img.shape[-1]-args.crop_size), random.randint(0,load_img.shape[-1]-args.crop_size)]
 
-        # real_img, converted = real_stack[:, :-2], real_stack[:, -2:]
+        # crop real image
+        if load_img.shape[-1] > args.crop_size:
+            real_img = mycrop(load_img[:, -5:, :, :], size=args.crop_size, tileable=not args.no_tileable, rand0=rand0)
+        # print('real_img:', real_img.shape)
 
-        real_img = real_img.to(device)
+        real_img = real_img.to(device) # [B, crop_size, H, W]
         converted = converted.to(device)
         if embed_x is not None:
             embed_x = embed_x.to(device)
-
-        # print('real_img', real_img.shape)
-        # print('converted', converted.shape)
 
         requires_grad(generator, False)
         requires_grad(discriminator, True)
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _, in_pats_cr = generator(converted, noise, rand0=rand0, embed_x = embed_x, in_pats = in_pats)
 
         # print('fake image:', fake_img.shape)
+        key = np.random.randint(n_scales)
+
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
-        fake_pred = discriminator(fake, key)
+        fake_pred = discriminator(fake, key, in_pats = in_pats_cr)
 
         real = real_img if args.img2dis else real_stack
-        real_pred = discriminator(real, key)
+        real_pred = discriminator(real, key, in_pats = in_pats_cr)
         d_loss = d_logistic_loss(real_pred, fake_pred)
 
         loss_dict['d'] = d_loss
@@ -173,7 +182,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         if d_regularize:
             real.requires_grad = True
-            real_pred = discriminator(real, key)
+            real_pred = discriminator(real, key, in_pats = in_pats_cr)
             r1_loss = d_r1_loss(real_pred, real)
 
             discriminator.zero_grad()
@@ -188,9 +197,9 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _ = generator(converted, noise, embed_x = embed_x)
+        fake_img, _, _, in_pats_cr = generator(converted, noise, rand0=rand0, embed_x = embed_x, in_pats = in_pats)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
-        fake_pred = discriminator(fake, key)
+        fake_pred = discriminator(fake, key, in_pats = in_pats_cr)
         g_loss = g_nonsaturating_loss(fake_pred)
 
         loss_dict['g'] = g_loss
@@ -232,7 +241,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                 writer.add_scalar("Fake Score", fake_score_val, i)
                 writer.add_scalar("Path Length", path_length_val, i)
 
-            if i % 500 == 0:
+            if i % 1000 == 0:
                 with torch.no_grad():
                     g_ema.eval()
                     converted_full = convert_to_coord_format(args.n_sample, args.coords_size, args.coords_size, device,
@@ -242,15 +251,14 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x)
+                            sample, _, _,_ = g_ema(converted_full, [sz.unsqueeze(0)], embed_x = embed_x, in_pats = in_pats)
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
                         sample_z = torch.randn(args.n_sample, args.latent, device=device)
-                        sample, _, _ = g_ema(converted_full, [sample_z], embed_x = embed_x)
+                        sample, _, _,_ = g_ema(converted_full, [sample_z], embed_x = embed_x, in_pats = in_pats)
                         del sample_z
 
-                    # print('sample', sample.shape)
                     if sample.shape[1]==10:
 
                         # save N
@@ -319,13 +327,22 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                             range=(-1, 1),
                         )
 
-                    # print('sample', sample.shape)
                     elif sample.shape[1]==5:
 
-                        # save N
+                        ######## save for test images
+                        if args.in_pat_c != 0:
+                            utils.save_image(
+                                in_pats[:,0:1,:,:].repeat(1,3,1,1),
+                                os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_Pat_e.png'),
+                                nrow=int(args.n_sample ** 0.5),
+                                normalize=True,
+                                range=(-1, 1),
+                            )
+
+                        # save H
                         utils.save_image(
                             sample[:,0:1,:,:].repeat(1,3,1,1),
-                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H.png'),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H_e.png'),
                             nrow=int(args.n_sample ** 0.5),
                             normalize=True,
                             range=(-1, 1),
@@ -333,7 +350,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                         # save D
                         utils.save_image(
                             sample[:,1:4,:,:],
-                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_D.png'),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_D_e.png'),
                             nrow=int(args.n_sample ** 0.5),
                             normalize=True,
                             range=(-1, 1),
@@ -341,12 +358,11 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                         # save R
                         utils.save_image(
                             sample[:,4:5,:,:].repeat(1,3,1,1),
-                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_R.png'),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_R_e.png'),
                             nrow=int(args.n_sample ** 0.5),
                             normalize=True,
                             range=(-1, 1),
                         )
-
 
                         # save H
                         utils.save_image(
@@ -372,6 +388,44 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                             normalize=True,
                             range=(-1, 1),
                         )
+
+
+                        ##### save for training
+                        if args.in_pat_c != 0:
+                            utils.save_image(
+                                in_pats_cr[:,0:1,:,:].repeat(1,3,1,1),
+                                os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_Pat_tr.png'),
+                                nrow=int(args.n_sample ** 0.5),
+                                normalize=True,
+                                range=(-1, 1),
+                            )
+
+                        # save H
+                        utils.save_image(
+                            fake_img[:,0:1,:,:].repeat(1,3,1,1),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_H_tr.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save D
+                        utils.save_image(
+                            fake_img[:,1:4,:,:],
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_D_tr.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+                        # save R
+                        utils.save_image(
+                            fake_img[:,4:5,:,:].repeat(1,3,1,1),
+                            os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_R_tr.png'),
+                            nrow=int(args.n_sample ** 0.5),
+                            normalize=True,
+                            range=(-1, 1),
+                        )
+
+
 
                     else:
                         utils.save_image(
@@ -416,6 +470,15 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                 )
 
 
+def filter_args(args):
+    if args.in_pat is not None:
+        args.n_sample=args.batch
+
+
+    return args
+
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -438,12 +501,14 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.002)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
-    parser.add_argument('--tileable', action='store_true')
+    parser.add_argument('--no_tileable', action='store_true')
+    parser.add_argument('--in_pat', type=str, default=None, help='None (default): no pattern || top: pattern into top || all: pattern into all layers')
+    parser.add_argument('--emb_pat', type=str, default='blur', help='blur (default): blurred patterns || net: network learned patterns')
 
     # dataset
     parser.add_argument('--batch', type=int, default=4)
     parser.add_argument('--num_workers', type=int, default=32)
-    parser.add_argument('--to_crop', action='store_true')
+    parser.add_argument('--resize', action='store_true')
     parser.add_argument('--crop_size', type=int, default=256)
     parser.add_argument('--coords_size', type=int, default=256)
 
@@ -455,11 +520,10 @@ if __name__ == '__main__':
     parser.add_argument('--fc_dim', type=int, default=512)
     parser.add_argument('--latent', type=int, default=512)
     parser.add_argument('--activation', type=str, default=None)
-    parser.add_argument('--in_pat_path', type=str, default='')
-    # parser.add_argument('--embed', type=str, default='LFF')
     parser.add_argument('--channel_multiplier', type=int, default=2)
     parser.add_argument('--mixing', type=float, default=0.)
     parser.add_argument('--g_reg_every', type=int, default=4)
+    parser.add_argument('--in_pat_c', type=int, default=0, help='# of input channels')
 
     # Discriminator params
     parser.add_argument('--Discriminator', type=str, default='Discriminator')
@@ -473,14 +537,14 @@ if __name__ == '__main__':
 
     device = args.device
 
+    filter_args(args)
 
-    print(f'coords_in: {args.coords_size} --> crop at beginning is {args.coords_size>args.size} --> generator_size: {args.size} -->  crop at end is {args.size>args.crop_size} --> crop_real_size: {args.crop_size}')
-    print('device', device)
+    print(f'coords_in: {args.coords_size} --> crop at beginning is {args.coords_size>args.size} --> generator_size: {args.size} -->  crop at end is {args.size>args.crop_size} --> real_size: {args.crop_size} (use resize: {args.resize})')
+    # print('device', device)
 
     Generator = getattr(model, args.Generator)
-    print('Generator', Generator)
     Discriminator = getattr(model, args.Discriminator)
-    print('Discriminator', Discriminator)
+    # print('Discriminator', Discriminator)
 
     os.makedirs(os.path.join(path, 'outputs', args.output_dir, 'images'), exist_ok=True)
     os.makedirs(os.path.join(path, 'outputs', args.output_dir, 'checkpoints'), exist_ok=True)
@@ -500,31 +564,36 @@ if __name__ == '__main__':
 
     args.n_mlp = 8
     args.dis_input_c = args.img_c if args.img2dis else args.img_c+2
-    # for height map
-    # args.dis_input_c = args.dis_input_c+2 if args.use_height else args.dis_input_c
-    print('img2dis', args.img2dis, 'dis_input_size', args.dis_input_c)
+    # print('img2dis', args.img2dis, 'dis_input_size', args.dis_input_c)
 
     args.start_iter = 0
     n_scales = int(math.log(args.size//args.crop_size, 2)) + 1
-    print('n_scales', n_scales)
 
     generator = Generator(img_channels = args.img_c, size=args.size, crop_size=args.crop_size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                          activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
-                          in_pat_path=args.in_pat_path).to(device)
+                          activation=args.activation, channel_multiplier=args.channel_multiplier, tileable=not args.no_tileable, N_emb=args.N_emb, 
+                          in_pat=args.in_pat, in_pat_c = args.in_pat_c, emb_pat = args.emb_pat
+                          ).to(device)
+
+    # for name, param in generator.linears.conv.named_parameters():
+    #     print(name, param.shape)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
     discriminator = Discriminator(
         size=args.crop_size, channel_multiplier=args.channel_multiplier, n_scales=n_scales, input_size=args.dis_input_c,
         n_first_layers=args.n_first_layers,
+        in_pat=args.in_pat, in_pat_c = args.in_pat_c,
     ).to(device)
     g_ema = Generator(img_channels = args.img_c, size=args.size, crop_size=args.crop_size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
-                      activation=args.activation, channel_multiplier=args.channel_multiplier,tileable=args.tileable, N_emb=args.N_emb,
-                      in_pat_path=args.in_pat_path).to(device)
+                      activation=args.activation, channel_multiplier=args.channel_multiplier, tileable=not args.no_tileable, N_emb=args.N_emb, 
+                      in_pat=args.in_pat, in_pat_c = args.in_pat_c, emb_pat = args.emb_pat
+                      ).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)
+    # print('Discriminator', discriminator)
 
     g_reg_ratio = args.g_reg_every / (args.g_reg_every + 1)
     d_reg_ratio = args.d_reg_every / (args.d_reg_every + 1)
+
 
     g_optim = optim.Adam(
         generator.parameters(),
@@ -583,7 +652,7 @@ if __name__ == '__main__':
     #                                    transforms.ToTensor(),
     #                                    transforms.Lambda(lambda x: x.mul_(255.).byte())])
 
-    dataset = MultiScaleDataset(args.path, crop_size=args.crop_size, integer_values=args.coords_integer_values)
+    dataset = MultiScaleDataset(args.path, integer_values=args.coords_integer_values, pat_c = args.in_pat_c, emb_pat=args.emb_pat)
     # fid_dataset = ImageDataset(args.path, transform=transform_fid, resolution=args.coords_size, to_crop=args.to_crop)
     # fid_dataset.length = args.fid_samples
     loader = data.DataLoader(

@@ -7,6 +7,112 @@ from torch.nn import functional as F
 
 from op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d
 
+import random
+
+# self-defined crop function
+def mycrop(x, size, center=False, rand0=None, tileable=True):
+
+    b,c,h,w = x.shape
+    if center:
+        if rand0 is None:
+            w0 = (w - size)*0.5
+            h0 = (h - size)*0.5
+            w0 = int(w0)
+            h0 = int(h0)
+        else:
+            h0 = rand0[0]
+            w0 = rand0[1]
+
+        print('center: ', w0, h0)
+        if w0+size>w or h0+size>h:
+            raise ValueError('value error of w0')
+
+        return x[:,:,w0:w0+self.size,h0:h0+self.size]
+
+    if not tileable:
+        if rand0 is None:
+            w0 = random.randint(0,w-size)
+            h0 = random.randint(0,h-size)
+        else:
+            h0 = rand0[0]
+            w0 = rand0[1]
+
+        if w0+size>w or h0+size>h:
+            raise ValueError('value error of w0')
+        print('rand: ', w0, h0)
+
+        return x[:,:,w0:w0+size,h0:h0+size]
+
+    else:
+        if rand0 is None:
+            w0 = random.randint(-size,w)
+            h0 = random.randint(-size,h)
+        else:
+            h0 = rand0[0]
+            w0 = rand0[1]
+
+        # print('rand tile: ', h0, w0)
+
+        wc = w0 + size
+        hc = h0 + size
+
+        p = torch.zeros((b,c,size,size), device='cuda')
+
+        # seperate crop and stitch them manually
+        # [7 | 8 | 9]
+        # [4 | 5 | 6]
+        # [1 | 2 | 3]
+        # 1
+        if h0<=0 and w0<=0:
+            p[:,:,0:-h0,0:-w0] = x[:,:, h+h0:h, w+w0:w]
+            p[:,:,-h0:,0:-w0] = x[:,:, 0:hc, w+w0:w]
+            p[:,:,0:-h0,-w0:] = x[:,:, h+h0:h, 0:wc]
+            p[:,:,-h0:,-w0:] = x[:,:, 0:hc, 0:wc]
+        # 2
+        elif h0<=0 and (w0<w-size and w0>0):
+            p[:,:,0:-h0,:] = x[:,:, h+h0:h,w0:wc]
+            p[:,:,-h0:,:] = x[:,:, 0:hc, w0:wc]
+        # 3
+        elif h0<=0 and w0 >=w-size:
+            p[:,:,0:-h0,0:w-w0] = x[:,:, h+h0:h, w0:w]
+            p[:,:,-h0:,0:w-w0] = x[:,:, 0:hc, w0:w]
+            p[:,:,0:-h0,w-w0:] = x[:,:, h+h0:h, 0:wc-w]
+            p[:,:,-h0:,w-w0:] = x[:,:, 0:hc, 0:wc-w]
+
+        # 4
+        elif (h0>0 and h0<h-size) and w0<=0:
+            p[:,:,:,0:-w0] = x[:,:, h0:hc, w+w0:w]
+            p[:,:,:,-w0:] = x[:,:, h0:hc, 0:wc]
+        # 5
+        elif (h0>0 and h0<h-size) and (w0<w-size and w0>0):
+            p = x[:,:, h0:hc, w0:wc]
+        # 6
+        elif (h0>0 and h0<h-size) and w0 >=w-size:
+            p[:,:,:,0:w-w0] = x[:,:, h0:hc, w0:w]
+            p[:,:,:,w-w0:] = x[:,:, h0:hc, 0:wc-w]
+
+        # 7
+        elif h0 >=h-size and w0<=0:
+            p[:,:,0:h-h0,0:-w0] = x[:,:, h0:h, w+w0:w]
+            p[:,:,h-h0:,0:-w0] = x[:,:, 0:hc-h, w+w0:w]
+            p[:,:,0:h-h0,-w0:] = x[:,:, h0:h, 0:wc]
+            p[:,:,h-h0:,-w0:] = x[:,:, 0:hc-h, 0:wc]
+        # 8
+        elif h0 >=h-size and (w0<w-size and w0>0):
+            p[:,:,0:h-h0,:] = x[:,:, h0:h,w0:wc]
+            p[:,:,h-h0:,:] = x[:,:, 0:hc-h, w0:wc]
+        # 9
+        elif h0 >=h-size and w0 >=w-size:
+            p[:,:,0:h-h0,0:w-w0] = x[:,:, h0:h, w0:w]
+            p[:,:,h-h0:,0:w-w0] = x[:,:, 0:hc-h, w0:w]
+            p[:,:,0:h-h0,w-w0:] = x[:,:, h0:h, 0:wc-w]
+            p[:,:,h-h0:,w-w0:] = x[:,:, 0:hc-h, 0:wc-w]
+
+        del x
+
+        return p
+
+
 
 class PixelNorm(nn.Module):
     def __init__(self):
@@ -25,6 +131,43 @@ def make_kernel(k):
     k /= k.sum()
 
     return k
+
+
+class PatembNet(nn.Module):
+    def __init__(self, emb_pat, in_pat_c, n_layers=3):
+        super().__init__()
+
+        # hard code the hidden dim
+        hidden_dim = in_pat_c
+        self.n_layers = n_layers
+        if emb_pat=='net_conv':
+            self.net = nn.ModuleList()
+            for i in range(self.n_layers):
+                in_channels = 1 if i==0 else hidden_dim
+                self.net.append(nn.Conv2d(in_channels, hidden_dim, 5, padding=2, padding_mode='circular'))
+
+        # elif emb_pat=='net_Unet':
+        #     self.net = nn.ModuleList()
+        #     for i in range(self.n_layers):
+        #         in_channels = 1 if i==0 else hidden_dim
+        #         self.net.append(nn.Conv2d(in_channels, hidden_dim, 5, padding=2))
+
+        # elif emb_pat=='net_enco':
+
+
+        self.leakyrelu = nn.LeakyReLU()
+        self.tanh = nn.Tanh()
+
+    def forward(self, x):
+
+        for i in range(self.n_layers):
+            if i!=self.n_layers-1:
+                x = self.leakyrelu(self.net[i](x))
+            else:
+                x = self.tanh(self.net[i](x))
+
+        return x
+
 
 
 class Upsample(nn.Module):
