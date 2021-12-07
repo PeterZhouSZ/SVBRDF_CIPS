@@ -26,7 +26,7 @@ Or download the MDB file of Valentin Dataset [link](https://drive.google.com/dri
 
 To download bricks dataset, download from this link: [link](https://drive.google.com/file/d/1H1dFjwZUZ1eW_2JUnmW0DwNgHlOYnLBo/view?usp=sharing) and save it to `./Data/`
 
-To download bricks dataset with processed patterns, please download from this link: [link](https://drive.google.com/drive/folders/1O1aw_oEFo9tLVf2RSt_zlpCwmJRv9YpM?usp=sharing) and save it to`./Data/`
+To download bricks dataset with processed patterns, please download from this link: [link](https://drive.google.com/drive/folders/1O1aw_oEFo9tLVf2RSt_zlpCwmJRv9YpM?usp=sharing) and save it to`./Data/Bricks_pat2`
 
 2) Training commands:
 
