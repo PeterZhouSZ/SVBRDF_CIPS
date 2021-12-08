@@ -568,6 +568,7 @@ if __name__ == '__main__':
     args.start_iter = 0
     n_scales = int(math.log(args.size//args.crop_size, 2)) + 1
 
+    print('self.in_pat_c ',args.in_pat_c)
     generator = Generator(img_channels = args.img_c, size=args.size, crop_size=args.crop_size, hidden_size=args.fc_dim, style_dim=args.latent, n_mlp=args.n_mlp,
                           activation=args.activation, channel_multiplier=args.channel_multiplier, tileable=not args.no_tileable, N_emb=args.N_emb, 
                           in_pat=args.in_pat, in_pat_c = args.in_pat_c, emb_pat = args.emb_pat
@@ -595,7 +596,7 @@ if __name__ == '__main__':
     d_reg_ratio = args.d_reg_every / (args.d_reg_every + 1)
 
 
-    if args.in_pat is None:
+    if 'net' not in args.emb_pat:
         g_optim = optim.Adam(
             generator.parameters(),
             lr=args.lr * g_reg_ratio,

@@ -28,7 +28,7 @@ class CIPSskip(nn.Module):
 
         if 'net' in self.emb_pat:
             self.patnet = PatembNet(emb_pat,self.in_pat_c)
-            self.in_pat_c = 32 # hard code emb_pat if use network 
+            # self.in_pat_c = 32 # hard code emb_pat if use network 
 
         if N_emb==-1:
             self.lff = LFF(hidden_size)
@@ -56,6 +56,7 @@ class CIPSskip(nn.Module):
             assert in_pat_c==0, 'pat channel must be 0 if NOT use in_pat'
 
         elif in_pat == 'top':
+            print('self.in_pat_c: ',self.in_pat_c)
             inc += self.in_pat_c
 
         in_channels = int(self.channels[0])
