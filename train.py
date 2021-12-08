@@ -425,8 +425,6 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                             range=(-1, 1),
                         )
 
-
-
                     else:
                         utils.save_image(
                             sample,
@@ -499,6 +497,7 @@ if __name__ == '__main__':
     parser.add_argument('--generate_by_one', action='store_true')
     parser.add_argument('--ckpt', type=str, default=None)
     parser.add_argument('--lr', type=float, default=0.002)
+    parser.add_argument('--pat_lr', type=float, default=0.002)
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
     parser.add_argument('--no_tileable', action='store_true')
@@ -574,8 +573,9 @@ if __name__ == '__main__':
                           in_pat=args.in_pat, in_pat_c = args.in_pat_c, emb_pat = args.emb_pat
                           ).to(device)
 
-    # for name, param in generator.linears.conv.named_parameters():
-    #     print(name, param.shape)
+    # for param in generator.named_parameters():
+    #     if 'patnet' in param[0]:
+    #         print(param[0], param[1].shape)
 
     print('generator N params', sum(p.numel() for p in generator.parameters() if p.requires_grad))
     discriminator = Discriminator(
@@ -595,11 +595,25 @@ if __name__ == '__main__':
     d_reg_ratio = args.d_reg_every / (args.d_reg_every + 1)
 
 
-    g_optim = optim.Adam(
-        generator.parameters(),
-        lr=args.lr * g_reg_ratio,
-        betas=(0 ** g_reg_ratio, 0.99 ** g_reg_ratio),
-    )
+    if args.in_pat is None:
+        g_optim = optim.Adam(
+            generator.parameters(),
+            lr=args.lr * g_reg_ratio,
+            betas=(0 ** g_reg_ratio, 0.99 ** g_reg_ratio),
+        )
+    else:
+        print(f'....................................use two learning rate for genertor and generator.embpat. generator {args.lr} || patnet {args.pat_lr} ')
+        g_optim = optim.Adam(
+            [
+            {'params':[param[1] for param in generator.named_parameters() if 'patnet' not in param[0]],},
+            {'params':generator.patnet.parameters(), 'lr':args.pat_lr*g_reg_ratio}
+            ],
+            lr=args.lr * g_reg_ratio,
+            betas=(0 ** g_reg_ratio, 0.99 ** g_reg_ratio),
+        )
+
+
+
     d_optim = optim.Adam(
         discriminator.parameters(),
         lr=args.lr * d_reg_ratio,
