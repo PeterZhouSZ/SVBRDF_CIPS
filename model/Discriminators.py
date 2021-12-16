@@ -9,15 +9,19 @@ from .blocks import ConvLayer, ResBlock, EqualLinear
 
 
 class Discriminator(nn.Module):
-    def __init__(self, size, channel_multiplier=2, blur_kernel=[1, 3, 3, 1], input_size=3, n_first_layers=0, in_pat=None, in_pat_c=0, **kwargs):
+    def __init__(self, size, channel_multiplier=2, blur_kernel=[1, 3, 3, 1], input_size=3, n_first_layers=0, in_pat=None, in_pat_c=0, emb_pat='blur', hidden_size=512, **kwargs):
         super().__init__()
 
-        self.in_pat=in_pat
+        self.in_pat = in_pat
+        self.emb_pat = emb_pat
         if self.in_pat is not None:
-
-            self.input_size = input_size + in_pat_c
+            if self.emb_pat=='emb_blur':
+                self.input_size = input_size + in_pat_c + hidden_size
+            else:
+                self.input_size = input_size + in_pat_c
         else:
             self.input_size = input_size
+        print('Discriminator input_c', self.input_size)
 
         channels = {
             4: 512,

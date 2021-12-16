@@ -17,7 +17,7 @@ from torchvision import transforms
 import random
 
 class MultiScaleDataset(Dataset):
-    def __init__(self, path, integer_values=False, pat_c=1, emb_pat='blur'):
+    def __init__(self, path, integer_values=False, pat_c=1, pat_index=-1, emb_pat='blur',resize=False):
         self.env = lmdb.open(
             path,
             max_readers=32,
@@ -28,6 +28,8 @@ class MultiScaleDataset(Dataset):
         )
         self.integer_values = integer_values
         self.pat_c = pat_c if 'net' not in emb_pat else 1
+        self.pat_index = pat_index
+        self.resize_train = resize
         # for i in range(self.pat_c-1):
         #     setattr(self, f'Gblurrer_{i}', transforms.GaussianBlur(kernel_size=(5, 5), sigma=0.5))
 
@@ -83,19 +85,28 @@ class MultiScaleDataset(Dataset):
             R = img[:,0:1,:,2*h:3*h]**gamma
 
 
-            # load patterns
-            P_list = []
-            for i in range(8):
-                i = i+3
-                P = img[:,0:1,:,i*h:(i+1)*h]
-                P_list.append(P)
+            # load patterns based on index or not
+            if self.pat_index>=0:
+                i = self.pat_index+3
+                P_list = img[:,0:1,:,i*h:(i+1)*h]
 
-            P_list = torch.cat(P_list, dim=1)
-            # print('P_blur ', P_blur.shape)
+            else:
+                P_list = []
+                for i in range(self.pat_c):
+                    i = i+3
+                    P = img[:,0:1,:,i*h:(i+1)*h]
+                    P_list.append(P)
+
+                P_list = torch.cat(P_list, dim=1)
+                # print('...................... pattern', P_list)
 
             img = torch.cat((P_list, H, D, R), dim=1) # [1,C,H, W]
             img = img*2-1
             # print('load data', img.shape)
+
+            if self.resize_train:
+                img = F.interpolate(img, size=(256,256), mode='bilinear', align_corners=True)
+
             return img.squeeze(0) #, self.coords.squeeze(0)
 
 

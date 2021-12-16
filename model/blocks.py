@@ -14,20 +14,16 @@ def mycrop(x, size, center=False, rand0=None, tileable=True):
 
     b,c,h,w = x.shape
     if center:
-        if rand0 is None:
-            w0 = (w - size)*0.5
-            h0 = (h - size)*0.5
-            w0 = int(w0)
-            h0 = int(h0)
-        else:
-            h0 = rand0[0]
-            w0 = rand0[1]
+        w0 = (w - size)*0.5
+        h0 = (h - size)*0.5
+        w0 = int(w0)
+        h0 = int(h0)
 
         print('center: ', w0, h0)
         if w0+size>w or h0+size>h:
             raise ValueError('value error of w0')
 
-        return x[:,:,w0:w0+self.size,h0:h0+self.size]
+        return x[:,:,w0:w0+size,h0:h0+size]
 
     if not tileable:
         if rand0 is None:
@@ -324,6 +320,7 @@ class ModulatedConv2d(nn.Module):
         upsample=False,
         downsample=False,
         blur_kernel=[1, 3, 3, 1],
+        channel_conv=False,
     ):
         super().__init__()
 
@@ -333,6 +330,7 @@ class ModulatedConv2d(nn.Module):
         self.out_channel = out_channel
         self.upsample = upsample
         self.downsample = downsample
+        self.channel_conv = channel_conv
 
         if upsample:
             factor = 2
@@ -354,9 +352,16 @@ class ModulatedConv2d(nn.Module):
         self.scale = 1 / math.sqrt(fan_in)
         self.padding = kernel_size // 2
 
-        self.weight = nn.Parameter(
-            torch.randn(1, out_channel, in_channel, kernel_size, kernel_size)
-        )
+        if self.channel_conv:
+            self.weight = nn.Parameter(
+                torch.randn(1, out_channel, 1, kernel_size, kernel_size)
+            )
+            # print('chconv shape:', self.weight.shape)
+        else:
+            self.weight = nn.Parameter(
+                torch.randn(1, out_channel, in_channel, kernel_size, kernel_size)
+            )
+            # print('pixconv shape:', self.weight.shape)
 
         self.modulation = EqualLinear(style_dim, in_channel, bias_init=1)
 
@@ -372,17 +377,37 @@ class ModulatedConv2d(nn.Module):
         batch, in_channel, height, width = input.shape
         # print('style_plus ', style_plus)
         if not style_plus:
-            style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
+            # print('style shape0 ', style.shape)
+            # print('style shape1 ', self.modulation(style).shape)
+            if self.channel_conv:
+                style = self.modulation(style).view(batch, self.out_channel, 1, 1, 1)
+            else:
+                style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
+            # print('style shape2 ', style.shape)
+
+        # print('weight shape0:', self.weight.shape)
 
         weight = self.scale * self.weight * style
+        # print('weight shape1:', weight.shape)
 
         if self.demodulate:
-            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
-            weight = weight * demod.view(batch, self.out_channel, 1, 1, 1)
-
-        weight = weight.view(
-            batch * self.out_channel, in_channel, self.kernel_size, self.kernel_size
-        )
+            if self.channel_conv:
+                demod = torch.rsqrt(weight.pow(2).sum([1, 3, 4]) + 1e-8)
+                weight = weight * demod.view(batch, 1, 1, 1, 1)
+            else:
+                demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
+                weight = weight * demod.view(batch, self.out_channel, 1, 1, 1)
+        
+        # print('weight shape2:', weight.shape)
+        if self.channel_conv:
+            weight = weight.view(
+                batch * self.out_channel, 1, self.kernel_size, self.kernel_size
+            )            
+        else:
+            weight = weight.view(
+                batch * self.out_channel, in_channel, self.kernel_size, self.kernel_size
+            )
+        # print('weight shape3:', weight.shape)
 
         if self.upsample:
             input = input.view(1, batch * in_channel, height, width)
@@ -407,7 +432,19 @@ class ModulatedConv2d(nn.Module):
 
         else:
             input = input.view(1, batch * in_channel, height, width)
-            out = F.conv2d(input, weight, padding=self.padding, groups=batch)
+            if not self.channel_conv:
+                # print('input shape', input.shape)
+                # print('weight shape', weight.shape)
+                out = F.conv2d(input, weight, padding=self.padding, groups=batch)
+                # print('pixconv out shape', out.shape)
+            else:
+                # print('input shape', input.shape)
+                pad_input = F.pad(input, (self.padding,self.padding,self.padding,self.padding), mode ='circular')
+                # print('self.in_channel', self.in_channel)
+                # print('pad_input shape', pad_input.shape)
+                # print('weight shape', weight.shape)
+                out = F.conv2d(pad_input, weight, groups=batch*self.in_channel)
+                # print('chconv out shape', out.shape)
             _, _, height, width = out.shape
             out = out.view(batch, self.out_channel, height, width)
 
@@ -452,6 +489,7 @@ class StyledConv(nn.Module):
         demodulate=True,
         activation=None,
         downsample=False,
+        channel_conv=False
     ):
         super().__init__()
 
@@ -464,6 +502,7 @@ class StyledConv(nn.Module):
             blur_kernel=blur_kernel,
             demodulate=demodulate,
             downsample=downsample,
+            channel_conv=channel_conv
         )
 
         self.activation = activation

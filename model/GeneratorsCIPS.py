@@ -16,7 +16,7 @@ import random
 
 class CIPSskip(nn.Module):
     def __init__(self, img_channels=3, size=256, crop_size = 256, hidden_size=512, n_mlp=8, style_dim=512, lr_mlp=0.01,
-                 activation=None, channel_multiplier=2, tileable=False, N_emb=-1, in_pat=None, in_pat_c=0, emb_pat='net_conv', **kwargs):
+                 activation=None, channel_multiplier=2, tileable=False, N_emb=-1, in_pat=None, in_pat_c=0, emb_pat='net_conv', add_chconv=False, **kwargs):
         super(CIPSskip, self).__init__()
 
         self.size = size
@@ -25,6 +25,8 @@ class CIPSskip(nn.Module):
         self.in_pat = in_pat
         self.in_pat_c = in_pat_c
         self.emb_pat = emb_pat
+        self.add_chconv = add_chconv
+        print('add channel conv: ', self.add_chconv)
 
         if 'net' in self.emb_pat:
             self.patnet = PatembNet(emb_pat,self.in_pat_c)
@@ -37,6 +39,10 @@ class CIPSskip(nn.Module):
             c_emb = N_emb*4
 
         self.emb = ConstantInput(hidden_size, size=size)
+
+        if self.emb_pat=='emb_blur':
+            self.pat_emb = ConstantInput(hidden_size, size=size)
+            c_emb+=hidden_size
 
         self.channels = {
             0: 512,
@@ -54,9 +60,8 @@ class CIPSskip(nn.Module):
         inc = int(hidden_size+c_emb)
         if in_pat is None:
             assert in_pat_c==0, 'pat channel must be 0 if NOT use in_pat'
-
         elif in_pat == 'top':
-            print('self.in_pat_c: ',self.in_pat_c)
+            # print('self.in_pat_c: ',self.in_pat_c)
             inc += self.in_pat_c
 
         in_channels = int(self.channels[0])
@@ -70,7 +75,7 @@ class CIPSskip(nn.Module):
         self.log_size = int(math.log(size, 2))
 
         self.n_intermediate = self.log_size - 1
-        self.to_rgb_stride = 2
+        self.to_rgb_stride = 2 if not self.add_chconv else 3
         for i in range(0, self.log_size - 1):
             out_channels = self.channels[i]
 
@@ -86,8 +91,16 @@ class CIPSskip(nn.Module):
                 print('all: ', in_channels, 'all2: ', out_channels)
                 self.linears.append(StyledConv(in_channels, out_channels, 1, style_dim,
                                                demodulate=demodulate, activation=activation))
+
+                # add channel conv
+                if self.add_chconv:
+                    self.linears.append(StyledConv(out_channels, out_channels, 5, style_dim,
+                                                   demodulate=demodulate, activation=activation, channel_conv=True))
+
                 self.linears.append(StyledConv(out_channels, out_channels, 1, style_dim,
                                                demodulate=demodulate, activation=activation))
+
+
 
             self.to_rgbs.append(ToRGB(out_channels, img_channels, style_dim, upsample=False))
 
@@ -108,57 +121,6 @@ class CIPSskip(nn.Module):
         self.crop_size = crop_size
         self.tileable = tileable
 
-    def _h_to_N(self, img_in, mode='tangent_space', normal_format='gl', use_input_alpha=False, use_alpha=False, intensity=1.0/3.0, max_intensity=3.0):
-        """Atomic function: Normal (https://docs.substance3d.com/sddoc/normal-172825289.html)
-
-        Args:
-            img_in (tensor): Input image.
-            mode (str, optional): 'tangent space' or 'object space'. Defaults to 'tangent_space'.
-            normal_format (str, optional): 'gl' or 'dx'. Defaults to 'dx'.
-            use_input_alpha (bool, optional): Use input alpha. Defaults to False.
-            use_alpha (bool, optional): Enable the alpha channel. Defaults to False.
-            intensity (float, optional): Normalized height map multiplier on dx, dy. Defaults to 1.0/3.0.
-            max_intensity (float, optional): Maximum height map multiplier. Defaults to 3.0.
-
-        Returns:
-            Tensor: Normal image.
-        """
-        # grayscale_input_check(img_in, "input height field")
-        assert img_in.shape[1]==1, 'should be grayscale image'
-
-        def roll_row(img_in, n):
-            return img_in.roll(-n, 2)
-
-        def roll_col(img_in, n):
-            return img_in.roll(-n, 3)
-
-        def norm(vec): #[B,C,W,H]
-            vec = vec.div(vec.norm(2.0, 1, keepdim=True))
-            return vec
-
-        img_size = img_in.shape[2]
-        # intensity = intensity * max_intensity * img_size / 256.0 # magic number to match sbs, check it later
-        intensity = (intensity * 2.0 - 1.0) * max_intensity * img_size / 256.0 # magic number to match sbs, check it later
-        dx = roll_col(img_in, -1) - img_in
-        dy = roll_row(img_in, -1) - img_in
-        if normal_format == 'gl':
-            img_out = torch.cat((intensity*dx, -intensity*dy, torch.ones_like(dx)), 1)
-        elif normal_format == 'dx':
-            img_out = torch.cat((intensity*dx, intensity*dy, torch.ones_like(dx)), 1)
-        else:
-            img_out = torch.cat((-intensity*dx, intensity*dy, torch.ones_like(dx)), 1)
-        img_out = norm(img_out)
-        # if mode == 'tangent_space':
-        #     img_out = img_out / 2.0 + 0.5
-        
-        if use_alpha == True:
-            if use_input_alpha:
-                img_out = torch.cat([img_out, img_in], dim=1)
-            else:
-                img_out = torch.cat([img_out, torch.ones(img_out.shape[0], 1, img_out.shape[2], img_out.shape[3])], dim=1)
-
-        return img_out
-
     def forward(self,
                 coords,
                 latent,
@@ -169,7 +131,7 @@ class CIPSskip(nn.Module):
                 return_latents_plus=False,
                 input_is_latent=False,
                 input_is_latent_plus=False,
-                embed_x=None,
+                embed=None,
                 crop=False,
                 center_crop=False,
                 ):
@@ -180,12 +142,12 @@ class CIPSskip(nn.Module):
         batch_size, _, w, h = coords.shape
 
         latent = self.style(latent[0]) if not input_is_latent and not input_is_latent_plus else latent[0]
-        x = embed_x.repeat(batch_size,1,1,1) if embed_x is not None else self.lff(coords)
+        x = embed.repeat(batch_size,1,1,1) if embed is not None else self.lff(coords)
 
         if self.training and w == h == self.size:
             emb = self.emb(x)
         else:
-            # print('gema...............')
+            print('coords', coords.shape)
             emb = F.grid_sample(
                 self.emb.input.expand(batch_size, -1, -1, -1),
                 coords.permute(0, 2, 3, 1).contiguous(),
@@ -197,25 +159,35 @@ class CIPSskip(nn.Module):
         # crop coords
         if x.shape[-1]>self.size and (self.training or crop):
             x = mycrop(x, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
-            # print('crop coords', x.shape)
 
         # pat emb net
         if 'net' in self.emb_pat:
             in_pats = self.patnet(in_pats)
 
+        # add pat embeddings
+        if self.emb_pat=='emb_blur':
+            if self.training and w == h == self.size:
+                pat_emb = self.pat_emb(in_pats)
+            else:
+                print('in_pats', in_pats.shape)
+                pat_emb = F.grid_sample(
+                    self.pat_emb.input.expand(batch_size, -1, -1, -1),
+                    coords.permute(0, 2, 3, 1).contiguous(),
+                    padding_mode='border', mode='bilinear',
+                )
+
+            in_pats = torch.cat([in_pats, pat_emb], 1)
 
         # crop pats
-        if in_pats.shape[-1]>self.size and (self.training or crop):
-            in_pats = mycrop(in_pats, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
-            # print('crop pat',in_pats.shape)
+        if in_pats is not None:
+            if in_pats.shape[-1]>self.size and (self.training or crop):
+                in_pats = mycrop(in_pats, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
 
-        assert x.shape[-1]==in_pats.shape[-1],f'shape of x {x.shape[-1]} and in_pat {in_pats.shape[-1]} not match'
+            assert x.shape[-1]==in_pats.shape[-1],f'shape of x {x.shape[-1]} and in_pat {in_pats.shape[-1]} not match'
 
         # if pattern to top
         if self.in_pat=='top':
             x = torch.cat([x, in_pats],1)
-
-        # print('top in shape (with pattern):', x.shape)
 
         rgb = 0
         latent_plus_list=[]
