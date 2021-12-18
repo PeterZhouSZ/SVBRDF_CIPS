@@ -120,10 +120,10 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
     if args.N_emb>0:
         from model.blocks import Myembed
         embed_fn = Myembed(args.N_emb)
+        # embed_fn = Myembed(args.N_emb)
         print('---------converted ------', converted.shape)
         embed_xy = embed_fn(converted[0:1,...])
         print('---------NERF embedding ------', embed_xy.shape)
-
 
     real_pat_c = 1 if 'net' in args.emb_pat else args.in_pat_c
 
@@ -136,19 +136,28 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         load_img = next(loader) 
         in_pats = load_img[:, 0:real_pat_c, :, :].to(device) # [B, load_img_size, H, W]
-        # print('in_pats:', in_pats.shape)
 
-        # crop images if needed
+        ############# crop ###############
         rand0 = None
         if not args.no_tileable:
             rand0 = [random.randint(-args.crop_size, load_img.shape[-1]),random.randint(-args.crop_size, load_img.shape[-1])]
         else:
             rand0 = [random.randint(0,load_img.shape[-1]-args.crop_size), random.randint(0,load_img.shape[-1]-args.crop_size)]
 
-        # crop real image
+        ## crop real image
         real_img = mycrop(load_img[:, -5:, :, :], size=args.crop_size, tileable=not args.no_tileable, rand0=rand0) if load_img.shape[-1] > args.crop_size else load_img[:, -5:, :, :]
 
-        # print('real_img:', real_img.shape)
+        # crop pats
+        if in_pats is not None:
+            in_pats_cr = mycrop(in_pats, size=args.crop_size, tileable=not args.no_tileable, rand0=rand0) if in_pats.shape[-1]>real_img.shape[-1] else in_pats
+
+        ##  patterns embeddings
+        if args.emb_pat=='ff_blur':
+            # print('---------ff_blur ------', in_pats_cr.shape)
+            in_pats_tr = embed_fn(in_pats_cr[:,1:,...])
+            # print('---------ff_blur ------', in_pats_tr.shape)
+
+        in_pats_D = in_pats_cr[:,0:1,...] if args.emb_pat=='ff_blur' else in_pats_cr
 
         real_img = real_img.to(device) # [B, crop_size, H, W]
         converted = converted.to(device)
@@ -160,16 +169,16 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _, in_pats_cr = generator(converted, noise, rand0=rand0, embed = embed_xy, in_pats = in_pats)
+        fake_img, _, _ = generator(converted, noise, rand0=rand0, embed = embed_xy, in_pats = in_pats_tr)
 
         # print('fake image:', fake_img.shape)
         key = np.random.randint(n_scales)
 
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
-        fake_pred = discriminator(fake, key, in_pats = in_pats_cr if not args.no_pat_D else None)
+        fake_pred = discriminator(fake, key, in_pats = in_pats_D if not args.no_pat_D else None)
 
         real = real_img if args.img2dis else real_stack
-        real_pred = discriminator(real, key, in_pats = in_pats_cr if not args.no_pat_D else None)
+        real_pred = discriminator(real, key, in_pats = in_pats_D if not args.no_pat_D else None)
         d_loss = d_logistic_loss(real_pred, fake_pred)
 
         loss_dict['d'] = d_loss
@@ -184,7 +193,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         if d_regularize:
             real.requires_grad = True
-            real_pred = discriminator(real, key, in_pats = in_pats_cr if not args.no_pat_D else None)
+            real_pred = discriminator(real, key, in_pats = in_pats_D if not args.no_pat_D else None)
             r1_loss = d_r1_loss(real_pred, real)
 
             discriminator.zero_grad()
@@ -199,9 +208,9 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
 
-        fake_img, _, _, in_pats_cr = generator(converted, noise, rand0=rand0, embed = embed_xy, in_pats = in_pats)
+        fake_img, _, _, = generator(converted, noise, rand0=rand0, embed = embed_xy, in_pats = in_pats_tr)
         fake = fake_img if args.img2dis else torch.cat([fake_img, converted], 1)
-        fake_pred = discriminator(fake, key, in_pats = in_pats_cr if not args.no_pat_D else None)
+        fake_pred = discriminator(fake, key, in_pats = in_pats_D if not args.no_pat_D else None)
         g_loss = g_nonsaturating_loss(fake_pred)
 
         loss_dict['g'] = g_loss
@@ -245,6 +254,12 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
             if i % 1000 == 0:
                 with torch.no_grad():
+
+                    ##  patterns embeddings
+                    if args.emb_pat=='ff_blur':
+                        in_pats_e = embed_fn(in_pats[:,1:,...])
+
+
                     g_ema.eval()
                     converted_full = convert_to_coord_format(args.n_sample, args.coords_size, args.coords_size, device,
                                                              integer_values=args.coords_integer_values)
@@ -253,12 +268,12 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                                                                  integer_values=args.coords_integer_values)
                         samples = []
                         for sz in sample_z:
-                            sample, _, _,_ = g_ema(converted_full, [sz.unsqueeze(0)], embed = embed_xy, in_pats = in_pats)
+                            sample, _, _ = g_ema(converted_full, [sz.unsqueeze(0)], embed = embed_xy, in_pats = in_pats_e)
                             samples.append(sample)
                         sample = torch.cat(samples, 0)
                     else:
                         sample_z = torch.randn(args.n_sample, args.latent, device=device)
-                        sample, _, _,_ = g_ema(converted_full, [sample_z], embed = embed_xy, in_pats = in_pats)
+                        sample, _, _ = g_ema(converted_full, [sample_z], embed = embed_xy, in_pats = in_pats_e)
                         del sample_z
 
                     if sample.shape[1]==10:
@@ -334,7 +349,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                         ######## save for test images
                         if args.in_pat_c != 0:
                             utils.save_image(
-                                in_pats[:,0:1,:,:].repeat(1,3,1,1),
+                                in_pats_e[:,0:1,:,:].repeat(1,3,1,1),
                                 os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_Pat_e.png'),
                                 nrow=int(args.n_sample ** 0.5),
                                 normalize=True,
@@ -396,8 +411,16 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                         if args.in_pat_c != 0:
                             # for k in range(in_pats_cr.shape[1]):
                             utils.save_image(
-                                in_pats_cr[:,0:1,:,:].repeat(1,3,1,1),
+                                in_pats_tr[:,0:1,:,:].repeat(1,3,1,1),
                                 os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_Pat_tr.png'),
+                                nrow=int(args.n_sample ** 0.5),
+                                normalize=True,
+                                range=(-1, 1),
+                            )
+
+                            utils.save_image(
+                                in_pats_D[:,0:1,:,:].repeat(1,3,1,1),
+                                os.path.join(path, 'outputs', args.output_dir, 'images', f'{str(i).zfill(6)}_Pat_Dis.png'),
                                 nrow=int(args.n_sample ** 0.5),
                                 normalize=True,
                                 range=(-1, 1),
@@ -505,7 +528,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_checkpoint_frequency', type=int, default=20000)
     parser.add_argument('--no_tileable', action='store_true')
     parser.add_argument('--in_pat', type=str, default=None, help='None (default): no pattern || top: pattern into top || all: pattern into all layers')
-    parser.add_argument('--emb_pat', type=str, default='blur', help='blur (default): blurred patterns || net: network learned patterns')
+    parser.add_argument('--emb_pat', type=str, default='blur', help='blur (default): blurred patterns || emb_blur : blurred patterns || ff_blur : blurred patterns || net: network learned patterns')
 
     # dataset
     parser.add_argument('--batch', type=int, default=4)

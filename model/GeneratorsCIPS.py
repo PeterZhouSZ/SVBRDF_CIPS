@@ -38,11 +38,13 @@ class CIPSskip(nn.Module):
         else:
             c_emb = N_emb*4
 
-        self.emb = ConstantInput(hidden_size, size=size)
-
         if self.emb_pat=='emb_blur':
             self.pat_emb = ConstantInput(hidden_size, size=size)
             c_emb+=hidden_size
+        elif self.emb_pat=='ff_blur':
+            c_emb +=N_emb*8
+
+        self.emb = ConstantInput(hidden_size, size=size)
 
         self.channels = {
             0: 512,
@@ -61,8 +63,8 @@ class CIPSskip(nn.Module):
         if in_pat is None:
             assert in_pat_c==0, 'pat channel must be 0 if NOT use in_pat'
         elif in_pat == 'top':
-            # print('self.in_pat_c: ',self.in_pat_c)
-            inc += self.in_pat_c
+            if self.emb_pat!='ff_blur':
+                inc += self.in_pat_c
 
         in_channels = int(self.channels[0])
         print('1st layer: ',inc, in_channels)
@@ -136,8 +138,6 @@ class CIPSskip(nn.Module):
                 center_crop=False,
                 ):
 
-        # if in_pats is not None and '':
-        #     assert in_pats.shape[1]==self.in_pat_c, '# of input channel not match'
         
         batch_size, _, w, h = coords.shape
 
@@ -147,7 +147,7 @@ class CIPSskip(nn.Module):
         if self.training and w == h == self.size:
             emb = self.emb(x)
         else:
-            print('coords', coords.shape)
+            # print('coords', coords.shape)
             emb = F.grid_sample(
                 self.emb.input.expand(batch_size, -1, -1, -1),
                 coords.permute(0, 2, 3, 1).contiguous(),
@@ -161,29 +161,24 @@ class CIPSskip(nn.Module):
             x = mycrop(x, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
 
         # pat emb net
-        if 'net' in self.emb_pat:
-            in_pats = self.patnet(in_pats)
+        # if 'net' in self.emb_pat:
+        #     in_pats = self.patnet(in_pats)
 
-        # add pat embeddings
-        if self.emb_pat=='emb_blur':
-            if self.training and w == h == self.size:
-                pat_emb = self.pat_emb(in_pats)
-            else:
-                print('in_pats', in_pats.shape)
-                pat_emb = F.grid_sample(
-                    self.pat_emb.input.expand(batch_size, -1, -1, -1),
-                    coords.permute(0, 2, 3, 1).contiguous(),
-                    padding_mode='border', mode='bilinear',
-                )
+        # # add pat embeddings
+        # if self.emb_pat=='emb_blur':
+        #     if self.training and w == h == self.size:
+        #         pat_emb = self.pat_emb(in_pats)
+        #     else:
+        #         print('in_pats', in_pats.shape)
+        #         pat_emb = F.grid_sample(
+        #             self.pat_emb.input.expand(batch_size, -1, -1, -1),
+        #             coords.permute(0, 2, 3, 1).contiguous(),
+        #             padding_mode='border', mode='bilinear',
+        #         )
 
-            in_pats = torch.cat([in_pats, pat_emb], 1)
+        #     in_pats = torch.cat([in_pats, pat_emb], 1)
 
-        # crop pats
-        if in_pats is not None:
-            if in_pats.shape[-1]>self.size and (self.training or crop):
-                in_pats = mycrop(in_pats, size=self.crop_size, tileable=self.tileable, center=center_crop, rand0=rand0)
-
-            assert x.shape[-1]==in_pats.shape[-1],f'shape of x {x.shape[-1]} and in_pat {in_pats.shape[-1]} not match'
+        assert x.shape[-1]==in_pats.shape[-1],f'shape of x {x.shape[-1]} and in_pat {in_pats.shape[-1]} not match'
 
         # if pattern to top
         if self.in_pat=='top':
@@ -191,6 +186,7 @@ class CIPSskip(nn.Module):
 
         rgb = 0
         latent_plus_list=[]
+        # print('x: ', x.shape)
         x, latent_plus = self.conv1(x, latent if not input_is_latent_plus else latent[0],style_plus=input_is_latent_plus)
         # print('+++++++++++++++++++++++++++++++++++',latent_plus.shape)
         latent_index = 1
@@ -217,13 +213,13 @@ class CIPSskip(nn.Module):
 
 
         if return_latents:
-            return rgb, latent, None, in_pats
+            return rgb, latent, None
 
         elif return_latents_plus:
-            return rgb, None, latent_plus_list, in_pats
+            return rgb, None, latent_plus_list
 
         else:
-            return rgb, None, None, in_pats
+            return rgb, None, None
 
 
 class CIPSres(nn.Module):

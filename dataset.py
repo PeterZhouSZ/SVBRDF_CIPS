@@ -27,6 +27,7 @@ class MultiScaleDataset(Dataset):
             meminit=False,
         )
         self.integer_values = integer_values
+        self.emb_pat = emb_pat
         self.pat_c = pat_c if 'net' not in emb_pat else 1
         self.pat_index = pat_index
         self.resize_train = resize
@@ -91,18 +92,28 @@ class MultiScaleDataset(Dataset):
                 P_list = img[:,0:1,:,i*h:(i+1)*h]
 
             else:
-                P_list = []
-                for i in range(self.pat_c):
-                    i = i+3
-                    P = img[:,0:1,:,i*h:(i+1)*h]
-                    P_list.append(P)
+                if self.emb_pat=='ff_blur':
+                    P_list = []
+                    for i in range(self.pat_c):
+                        i = i+3
+                        P = img[:,0:1,:,i*h:(i+1)*h]
+                        P_list.append(P)
 
-                P_list = torch.cat(P_list, dim=1)
+                    P_list = torch.cat(P_list, dim=1)
+
+                else:
+                    P_list = []
+                    for i in range(self.pat_c):
+                        i = i+3
+                        P = img[:,0:1,:,i*h:(i+1)*h]
+                        P_list.append(P)
+
+                    P_list = torch.cat(P_list, dim=1)
                 # print('...................... pattern', P_list)
 
             img = torch.cat((P_list, H, D, R), dim=1) # [1,C,H, W]
             img = img*2-1
-            # print('load data', img.shape)
+            print('load data', img.shape)
 
             if self.resize_train:
                 img = F.interpolate(img, size=(256,256), mode='bilinear', align_corners=True)

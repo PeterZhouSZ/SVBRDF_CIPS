@@ -17,6 +17,8 @@ class Discriminator(nn.Module):
         if self.in_pat is not None:
             if self.emb_pat=='emb_blur':
                 self.input_size = input_size + in_pat_c + hidden_size
+            elif self.emb_pat=='ff_blur':
+                self.input_size = input_size + 1
             else:
                 self.input_size = input_size + in_pat_c
         else:

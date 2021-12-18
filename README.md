@@ -22,11 +22,7 @@ of the paper [Image Generators with Conditionally-Independent Pixel Synthesis](h
 
 This will convert images to jpeg and pre-resizes it. `MDB_PATH =./Data/ValenTrain/256`
 
-Or download the MDB file of Valentin Dataset [link](https://drive.google.com/drive/folders/1xFAdBcJiC9KLkPjEC5UkcjEa1OcLTXEk?usp=sharing) and save it to `./Data/ValenTrain/256`
-
-To download bricks dataset, download from this link: [link](https://drive.google.com/file/d/1H1dFjwZUZ1eW_2JUnmW0DwNgHlOYnLBo/view?usp=sharing) and save it to `./Data/`
-
-To download bricks dataset with processed patterns, please download from this link: [link](https://drive.google.com/drive/folders/1O1aw_oEFo9tLVf2RSt_zlpCwmJRv9YpM?usp=sharing) and save it to`./Data/Bricks_pat2`
+To download bricks dataset with processed patterns, please download from this link: [link](https://drive.google.com/drive/folders/1ZMm1LxKvSuURXOBdEyPq0A5KHPQO9N7c?usp=sharing) and save it to`./Data/Bricks_pat3`
 
 2) Training commands:
 
